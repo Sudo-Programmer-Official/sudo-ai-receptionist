@@ -1,0 +1,19 @@
+{
+  "name": "@sudo-ai-receptionist/evaluation",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "eval": "tsx src/cli.ts",
+    "demo:text": "tsx src/demo-text.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sudo-ai-receptionist/agent-core": "file:../agent-core",
+    "@sudo-ai-receptionist/conversation-state": "file:../conversation-state",
+    "@sudo-ai-receptionist/mock-business": "file:../../integrations/mock-business"
+  }
+}

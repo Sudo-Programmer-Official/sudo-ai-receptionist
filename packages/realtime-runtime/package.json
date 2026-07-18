@@ -1,0 +1,15 @@
+{
+  "name": "@sudo-ai-receptionist/realtime-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sudo-ai-receptionist/conversation-state": "file:../conversation-state",
+    "@sudo-ai-receptionist/shared": "file:../shared"
+  }
+}

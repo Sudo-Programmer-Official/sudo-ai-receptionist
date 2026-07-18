@@ -1,0 +1,28 @@
+{
+  "name": "sudo-ai-receptionist",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@10.8.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "integrations/*"
+  ],
+  "scripts": {
+    "build": "npm run build -ws",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "dev": "npm run dev -ws --if-present",
+    "test": "npm run test -ws --if-present",
+    "eval": "npm --workspace @sudo-ai-receptionist/evaluation run eval",
+    "demo:text": "npm --workspace @sudo-ai-receptionist/evaluation run demo:text",
+    "check": "npm run lint -ws --if-present && npm run test -ws --if-present",
+    "format": "npm run format -ws --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "tsx": "^4.19.2"
+  }
+}

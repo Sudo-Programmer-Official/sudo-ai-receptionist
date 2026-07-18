@@ -1,0 +1,16 @@
+{
+  "name": "@sudo-ai-receptionist/mock-business",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sudo-ai-receptionist/business-contracts": "file:../../packages/business-contracts",
+    "@sudo-ai-receptionist/shared": "file:../../packages/shared"
+  }
+}

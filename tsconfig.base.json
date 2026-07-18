@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@sudo-ai-receptionist/business-contracts": ["packages/business-contracts/src/index.ts"],
+      "@sudo-ai-receptionist/conversation-state": ["packages/conversation-state/src/index.ts"],
+      "@sudo-ai-receptionist/shared": ["packages/shared/src/index.ts"],
+      "@sudo-ai-receptionist/observability": ["packages/observability/src/index.ts"],
+      "@sudo-ai-receptionist/agent-core": ["packages/agent-core/src/index.ts"],
+      "@sudo-ai-receptionist/realtime-runtime": ["packages/realtime-runtime/src/index.ts"],
+      "@sudo-ai-receptionist/evaluation": ["packages/evaluation/src/index.ts"],
+      "@sudo-ai-receptionist/mock-business": ["integrations/mock-business/src/index.ts"],
+      "@sudo-ai-receptionist/salonflow": ["integrations/salonflow/src/index.ts"]
+    },
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vitest/globals", "node"]
+  }
+}

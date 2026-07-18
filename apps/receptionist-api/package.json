@@ -1,0 +1,18 @@
+{
+  "name": "@sudo-ai-receptionist/receptionist-api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/server.ts",
+  "types": "./src/server.ts",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sudo-ai-receptionist/agent-core": "file:../../packages/agent-core",
+    "@sudo-ai-receptionist/mock-business": "file:../../integrations/mock-business",
+    "@sudo-ai-receptionist/realtime-runtime": "file:../../packages/realtime-runtime",
+    "@sudo-ai-receptionist/shared": "file:../../packages/shared"
+  }
+}
