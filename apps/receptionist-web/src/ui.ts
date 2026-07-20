@@ -1,6 +1,12 @@
 import type { ApiClient } from './api';
-import type { ChatResponse, ConversationStateSnapshot, ToolStatus } from './types';
-import { requestRealtimeSession } from './realtime';
+import type {
+  ConversationStateSnapshot,
+  LatencyMetric,
+  RealtimeSessionResponse,
+  ToolStatus,
+  VoiceState,
+} from './types';
+import { RealtimeVoiceController } from './realtime';
 
 type MountOptions = {
   root: HTMLElement;
@@ -10,11 +16,11 @@ type MountOptions = {
 type AppDom = {
   transcript: HTMLElement;
   sessionSummary: HTMLElement;
-  toolStatus: HTMLElement;
+  voiceState: HTMLElement;
+  voiceHint: HTMLElement;
   connectionState: HTMLElement;
   apiState: HTMLElement;
   micState: HTMLElement;
-  speakState: HTMLElement;
   connectionDot: HTMLElement;
   toolDot: HTMLElement;
   serviceValue: HTMLElement;
@@ -22,125 +28,166 @@ type AppDom = {
   phoneValue: HTMLElement;
   slotValue: HTMLElement;
   bookingValue: HTMLElement;
+  toolStatus: HTMLElement;
+  toolList: HTMLElement;
+  metricsList: HTMLElement;
+  stagePills: HTMLElement;
   userText: HTMLTextAreaElement;
   connectBtn: HTMLButtonElement;
   micBtn: HTMLButtonElement;
   interruptBtn: HTMLButtonElement;
   sendBtn: HTMLButtonElement;
   clearBtn: HTMLButtonElement;
+  remoteAudio: HTMLAudioElement;
 };
 
 type AppState = {
   conversation: ConversationStateSnapshot | null;
+  session: RealtimeSessionResponse | null;
+  voiceState: VoiceState;
+  toolStatus: ToolStatus[];
+  metrics: LatencyMetric[];
 };
 
+type StageMeta = {
+  state: VoiceState;
+  label: string;
+  hint: string;
+};
+
+const stages: StageMeta[] = [
+  { state: 'idle', label: 'Idle', hint: 'Waiting for you to connect the voice session.' },
+  { state: 'connecting', label: 'Connecting', hint: 'Creating an ephemeral realtime session.' },
+  { state: 'listening', label: 'Listening', hint: 'Microphone is live and the assistant is waiting.' },
+  { state: 'thinking', label: 'Thinking', hint: 'The backend is validating the last transcript.' },
+  { state: 'checking_availability', label: 'Checking availability', hint: 'SalonFlow is being queried for open times.' },
+  { state: 'offering_slots', label: 'Offering slots', hint: 'The assistant is reading out the top matches.' },
+  { state: 'collecting_customer', label: 'Collecting customer', hint: 'The assistant is asking for name or phone.' },
+  { state: 'confirming', label: 'Confirming', hint: 'Explicit booking approval is required now.' },
+  { state: 'booking', label: 'Booking', hint: 'The appointment write is in progress.' },
+  { state: 'booked', label: 'Booked', hint: 'A single appointment has been created.' },
+  { state: 'speaking', label: 'Speaking', hint: 'OpenAI Realtime is playing back the assistant voice.' },
+  { state: 'error', label: 'Error', hint: 'The voice connection or backend request failed.' },
+];
+
 const shellMarkup = `
-  <main>
-    <header>
-      <div>
-        <h1>AI Receptionist</h1>
-        <p>Browser voice scaffold for realtime intake, tool execution visibility, and booking confirmation.</p>
+  <main class="app-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow">Sudo AI Receptionist</div>
+        <h1>Natural browser voice booking with measured latency.</h1>
+        <p>OpenAI Realtime over WebRTC, backend-validated SalonFlow booking, and interruption-aware voice control.</p>
       </div>
-      <div class="chips" id="connectionChips">
-        <div class="chip" id="connectionState">Disconnected</div>
-        <div class="chip" id="apiState">Checking API</div>
-        <div class="chip" id="micState">Mic off</div>
-        <div class="chip" id="speakState">Idle</div>
+      <div class="status-stack">
+        <div class="chip-row">
+          <div class="chip" id="connectionState">Disconnected</div>
+          <div class="chip" id="apiState">Checking API</div>
+          <div class="chip" id="micState">Mic off</div>
+        </div>
+        <div class="voice-orb" id="connectionDot">
+          <div class="voice-orb-inner"></div>
+        </div>
       </div>
     </header>
 
     <div class="grid">
-      <section class="panel">
-        <div class="section-title">
+      <section class="panel stage-panel">
+        <div class="panel-top">
           <div>
-            <strong>Conversation</strong>
-            <div class="small">Transcript, live controls, and confirmation flow.</div>
+            <div class="section-title">Voice session</div>
+            <div class="small" id="voiceHint">Waiting for connection.</div>
           </div>
-          <div class="row">
-            <button class="primary" id="connectBtn">Connect</button>
-            <button class="ghost" id="micBtn">Enable Mic</button>
-            <button class="danger" id="interruptBtn">Interrupt</button>
-          </div>
+          <div class="voice-state" id="voiceState">idle</div>
         </div>
+
         <div class="panel-inner stack">
-          <div class="cards">
-            <div class="card">
-              <div class="row">
-                <div class="status-dot" id="connectionDot"></div>
-                <strong>Session state</strong>
-              </div>
-              <div class="small" id="sessionSummary">No session started.</div>
-            </div>
-            <div class="card">
-              <div class="row">
-                <div class="status-dot" id="toolDot"></div>
-                <strong>Tool execution</strong>
-              </div>
-              <div class="small" id="toolStatus">Waiting for an availability lookup or booking action.</div>
-            </div>
+          <div class="card">
+            <div class="chip-row wrap" id="stagePills"></div>
+          </div>
+
+          <div class="control-row">
+            <button class="primary" id="connectBtn">Start voice</button>
+            <button class="ghost" id="micBtn">Mic test</button>
+            <button class="danger" id="interruptBtn">Interrupt</button>
+            <button class="ghost" id="clearBtn">Clear transcript</button>
           </div>
 
           <div class="card">
-            <div class="row" style="justify-content: space-between;">
+            <div class="row-between">
+              <strong>Session summary</strong>
+              <div class="status-dot" id="toolDot"></div>
+            </div>
+            <div class="small" id="sessionSummary">No session started.</div>
+          </div>
+
+          <div class="card">
+            <div class="row-between">
+              <strong>Tool latency</strong>
+              <div class="small" id="toolStatus">No tool calls yet.</div>
+            </div>
+            <div class="metric-list" id="metricsSummary"></div>
+            <div class="tool-list" id="toolList"></div>
+          </div>
+
+          <div class="card transcript-card">
+            <div class="row-between">
               <strong>Transcript</strong>
-              <button class="ghost" id="clearBtn">Clear</button>
+              <span class="small">Voice and text fallback share the same backend path.</span>
             </div>
             <div class="transcript" id="transcript"></div>
           </div>
 
           <div class="card stack">
-            <strong>Send text fallback</strong>
-            <textarea id="userText" placeholder="Type what the customer says if voice is unavailable."></textarea>
-            <div class="row">
-              <button class="primary" id="sendBtn">Send</button>
-              <span class="small">The client only talks to the backend for session creation and tool execution.</span>
+            <strong>Text fallback</strong>
+            <textarea id="userText" placeholder="Type the customer request if voice is unavailable."></textarea>
+            <div class="control-row">
+              <button class="primary" id="sendBtn">Send text</button>
             </div>
           </div>
         </div>
       </section>
 
-      <aside class="panel">
+      <aside class="panel sidebar">
         <div class="section-title">
           <div>
             <strong>Booking details</strong>
-            <div class="small">Final confirmation state.</div>
+            <div class="small">Live conversation state from the backend.</div>
           </div>
         </div>
         <div class="panel-inner stack">
           <div class="card">
             <div class="small">Selected service</div>
-            <div id="serviceValue">None yet</div>
+            <div class="detail" id="serviceValue">None yet</div>
           </div>
           <div class="card split">
             <div>
               <div class="small">Customer name</div>
-              <div id="nameValue">Pending</div>
+              <div class="detail" id="nameValue">Pending</div>
             </div>
             <div>
               <div class="small">Customer phone</div>
-              <div id="phoneValue">Pending</div>
+              <div class="detail" id="phoneValue">Pending</div>
             </div>
           </div>
           <div class="card">
             <div class="small">Appointment slot</div>
-            <div id="slotValue">No slot selected</div>
+            <div class="detail" id="slotValue">No slot selected</div>
           </div>
           <div class="card">
             <div class="small">Booking status</div>
-            <div id="bookingValue">Unconfirmed</div>
+            <div class="detail" id="bookingValue">Unconfirmed</div>
           </div>
           <div class="card">
-            <div class="small">Connection notes</div>
+            <div class="small">Instrumentation</div>
             <div class="small">
-              Mic permission, speaking/listening indicators, interruption handling, and transcript visibility are wired at the UI layer.
+              Session startup latency, speech-to-audio delay, tool-call duration, SalonFlow endpoint latency, booking-write duration, and interruption handling are tracked in the client.
             </div>
           </div>
         </div>
-        <div class="footer-note">
-          Realtime session creation and any OpenAI or SalonFlow action should stay on the backend.
-        </div>
       </aside>
     </div>
+
+    <audio id="remoteAudio" autoplay playsinline class="sr-only"></audio>
   </main>
 `;
 
@@ -156,9 +203,6 @@ const setChipState = (element: HTMLElement, label: string, mode?: 'active' | 'wa
   element.className = `chip${mode ? ` ${mode}` : ''}`;
 };
 
-const summarizeToolStatus = (items: ToolStatus[] | undefined): string =>
-  items && items.length > 0 ? JSON.stringify(items) : 'No tools used in this turn.';
-
 const createDom = (root: HTMLElement): AppDom => {
   root.innerHTML = shellMarkup;
   const get = <T extends HTMLElement>(id: string): T => {
@@ -172,11 +216,11 @@ const createDom = (root: HTMLElement): AppDom => {
   return {
     transcript: get('transcript'),
     sessionSummary: get('sessionSummary'),
-    toolStatus: get('toolStatus'),
+    voiceState: get('voiceState'),
+    voiceHint: get('voiceHint'),
     connectionState: get('connectionState'),
     apiState: get('apiState'),
     micState: get('micState'),
-    speakState: get('speakState'),
     connectionDot: get('connectionDot'),
     toolDot: get('toolDot'),
     serviceValue: get('serviceValue'),
@@ -184,99 +228,163 @@ const createDom = (root: HTMLElement): AppDom => {
     phoneValue: get('phoneValue'),
     slotValue: get('slotValue'),
     bookingValue: get('bookingValue'),
+    toolStatus: get('toolStatus'),
+    toolList: get('toolList'),
+    metricsList: get('metricsSummary'),
+    stagePills: get('stagePills'),
     userText: get<HTMLTextAreaElement>('userText'),
     connectBtn: get<HTMLButtonElement>('connectBtn'),
     micBtn: get<HTMLButtonElement>('micBtn'),
     interruptBtn: get<HTMLButtonElement>('interruptBtn'),
     sendBtn: get<HTMLButtonElement>('sendBtn'),
     clearBtn: get<HTMLButtonElement>('clearBtn'),
+    remoteAudio: get<HTMLAudioElement>('remoteAudio'),
   };
 };
 
+const formatMetric = (metric: LatencyMetric): string => {
+  const suffix = metric.detail ? ` · ${metric.detail}` : '';
+  return `${metric.name}: ${metric.valueMs}ms${suffix}`;
+};
+
+const summarizeToolStatus = (items: ToolStatus[] | undefined): string =>
+  items && items.length > 0 ? items.map((item) => `${item.name} ${item.latencyMs ? `(${item.latencyMs}ms)` : ''}`.trim()).join(' · ') : 'No tool calls yet.';
+
 export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: () => void } => {
   const dom = createDom(root);
-  const state: AppState = { conversation: null };
-
-  const appendBubble = (role: 'user' | 'assistant' | 'tool', text: string): void => {
-    const bubble = document.createElement('div');
-    bubble.className = `bubble ${role}`;
-    bubble.textContent = text;
-    dom.transcript.appendChild(bubble);
-    dom.transcript.scrollTop = dom.transcript.scrollHeight;
+  const state: AppState = {
+    conversation: null,
+    session: null,
+    voiceState: 'idle',
+    toolStatus: [],
+    metrics: [],
   };
 
-  const syncBooking = (): void => {
-    dom.serviceValue.textContent = state.conversation?.requestedService || 'None yet';
-    dom.nameValue.textContent = state.conversation?.customerName || 'Pending';
-    dom.phoneValue.textContent = state.conversation?.customerPhone || 'Pending';
-    dom.slotValue.textContent =
-      state.conversation?.selectedSlot?.startsAt ||
-      state.conversation?.proposedSlots?.[0]?.startsAt ||
-      'No slot selected';
-    dom.bookingValue.textContent = state.conversation?.bookingConfirmationStatus || 'Unconfirmed';
-  };
+  const controller = new RealtimeVoiceController(
+    api,
+    {
+      onStateChange: (voiceState) => {
+        state.voiceState = voiceState;
+        const meta = stages.find((entry) => entry.state === voiceState) ?? stages[0]!;
+        setChipState(dom.voiceState, meta.label, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'active' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : 'active');
+        dom.voiceHint.textContent = meta.hint;
+        setStatusDot(dom.connectionDot, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'live' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : state.session ? 'live' : '');
+        renderStages();
+      },
+      onTranscript: (role, text) => {
+        const bubble = document.createElement('div');
+        bubble.className = `bubble ${role}`;
+        bubble.textContent = text;
+        dom.transcript.appendChild(bubble);
+        dom.transcript.scrollTop = dom.transcript.scrollHeight;
+      },
+      onSessionSummary: (summary) => {
+        dom.sessionSummary.textContent = summary;
+      },
+      onConversationState: (conversation) => {
+        state.conversation = conversation;
+        dom.serviceValue.textContent = conversation.requestedService ?? 'None yet';
+        dom.nameValue.textContent = conversation.customerName ?? 'Pending';
+        dom.phoneValue.textContent = conversation.customerPhone ?? 'Pending';
+        dom.slotValue.textContent =
+          conversation.selectedSlot?.startsAt ??
+          conversation.proposedSlots?.[0]?.startsAt ??
+          'No slot selected';
+        dom.bookingValue.textContent = conversation.bookingConfirmationStatus || 'Unconfirmed';
 
-  const setApiHealth = (label: string, mode: 'active' | 'warn' | 'fail' | undefined): void => {
-    setChipState(dom.apiState, label, mode);
+        if (conversation.bookingConfirmationStatus === 'confirmed') {
+          state.voiceState = 'booked';
+          setChipState(dom.voiceState, 'Booked', 'active');
+          dom.voiceHint.textContent = 'A single appointment has been created.';
+        } else if (conversation.bookingConfirmationStatus === 'pending') {
+          state.voiceState = 'confirming';
+          setChipState(dom.voiceState, 'Confirming', 'warn');
+          dom.voiceHint.textContent = 'Explicit yes is required before booking.';
+        }
+        renderStages();
+      },
+      onToolStatus: (toolStatus) => {
+        state.toolStatus = toolStatus;
+        dom.toolStatus.textContent = summarizeToolStatus(toolStatus);
+        dom.toolList.innerHTML = '';
+        for (const tool of toolStatus) {
+          const row = document.createElement('div');
+          row.className = 'tool-row';
+          row.textContent = `${tool.name} · ${tool.status}${tool.latencyMs ? ` · ${tool.latencyMs}ms` : ''}`;
+          dom.toolList.appendChild(row);
+        }
+        setStatusDot(dom.toolDot, toolStatus.some((tool) => tool.status === 'ok') ? 'live' : toolStatus.some((tool) => tool.status === 'error') ? 'fail' : '');
+      },
+      onMetric: (metric) => {
+        state.metrics = [metric, ...state.metrics].slice(0, 8);
+        dom.metricsList.innerHTML = '';
+        for (const item of state.metrics) {
+          const row = document.createElement('div');
+          row.className = 'metric-row';
+          row.textContent = formatMetric(item);
+          dom.metricsList.appendChild(row);
+        }
+      },
+      onError: (message) => {
+        setChipState(dom.apiState, 'Error', 'fail');
+        dom.sessionSummary.textContent = message;
+        state.voiceState = 'error';
+        setChipState(dom.voiceState, 'Error', 'fail');
+        dom.voiceHint.textContent = 'The realtime session or backend call failed.';
+        setStatusDot(dom.connectionDot, 'fail');
+        renderStages();
+      },
+    },
+    dom.remoteAudio,
+  );
+
+  const renderStages = (): void => {
+    dom.stagePills.innerHTML = '';
+    for (const stage of stages) {
+      const pill = document.createElement('div');
+      pill.className = `stage-pill${state.voiceState === stage.state ? ' active' : ''}`;
+      pill.textContent = stage.label;
+      pill.title = stage.hint;
+      dom.stagePills.appendChild(pill);
+    }
   };
 
   const refreshHealth = async (): Promise<void> => {
-    setApiHealth('Checking API', 'warn');
+    setChipState(dom.apiState, 'Checking API', 'warn');
     try {
       const health = await api.getHealth();
       const label = health.ok === false ? 'API degraded' : 'API healthy';
-      setApiHealth(label, 'active');
-      dom.sessionSummary.textContent = `Health check succeeded via /health${health.status ? ` (${health.status})` : ''}.`;
+      setChipState(dom.apiState, label, 'active');
+      if (!state.session) {
+        dom.sessionSummary.textContent = `Health check succeeded via /health${health.status ? ` (${health.status})` : ''}.`;
+      }
+      setStatusDot(dom.connectionDot, state.session ? 'live' : '');
     } catch {
-      setApiHealth('API offline', 'fail');
-      dom.sessionSummary.textContent = 'Unable to reach the backend health endpoint.';
+      setChipState(dom.apiState, 'API offline', 'fail');
+      if (!state.session) {
+        dom.sessionSummary.textContent = 'Unable to reach the backend health endpoint.';
+      }
+      setStatusDot(dom.connectionDot, 'fail');
     }
   };
 
   const connect = async (): Promise<void> => {
-    setChipState(dom.connectionState, 'Connecting...', 'warn');
-    setStatusDot(dom.connectionDot, 'warn');
-    dom.sessionSummary.textContent = 'Requesting ephemeral session from backend...';
+    setChipState(dom.voiceState, 'Connecting', 'warn');
+    state.voiceState = 'connecting';
+    renderStages();
     try {
-      const session = await requestRealtimeSession(api);
-      state.conversation = {
-        ...(state.conversation ?? {}),
-        conversationId: session.conversationId,
-      };
+      const session = await controller.connect(state.conversation ?? undefined);
+      state.session = session;
       setChipState(dom.connectionState, 'Connected', 'active');
       setStatusDot(dom.connectionDot, 'live');
-      dom.sessionSummary.textContent = `Session ${session.conversationId} expires at ${session.expiresAt}`;
-      appendBubble('tool', 'Realtime session created on the backend.');
-      syncBooking();
+      dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
+      renderStages();
     } catch (error) {
       setChipState(dom.connectionState, 'Connection failed', 'fail');
       setStatusDot(dom.connectionDot, 'fail');
-      dom.sessionSummary.textContent = error instanceof Error ? error.message : 'Failed to create session.';
-    }
-  };
-
-  const sendText = async (): Promise<void> => {
-    const text = dom.userText.value.trim();
-    if (!text) return;
-    appendBubble('user', text);
-    setChipState(dom.speakState, 'Listening', 'active');
-    try {
-      const response: ChatResponse = await api.sendChat({
-        text,
-        ...(state.conversation ? { state: state.conversation } : {}),
-      });
-      state.conversation = response.state ?? state.conversation;
-      appendBubble('assistant', response.message);
-      dom.toolStatus.textContent = summarizeToolStatus(response.toolStatus);
-      setStatusDot(dom.toolDot, response.toolStatus?.some((entry) => entry.status === 'ok') ? 'live' : '');
-      syncBooking();
-      setChipState(dom.speakState, response.requiresUserAction ? 'Waiting' : 'Speaking', response.requiresUserAction ? 'warn' : 'active');
-    } catch (error) {
-      appendBubble('tool', error instanceof Error ? error.message : 'The backend request failed.');
-      setChipState(dom.speakState, 'Error', 'fail');
-      setStatusDot(dom.toolDot, 'fail');
-    } finally {
-      dom.userText.value = '';
+      dom.sessionSummary.textContent = error instanceof Error ? error.message : 'Failed to create voice session.';
+      state.voiceState = 'error';
+      renderStages();
     }
   };
 
@@ -284,47 +392,50 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       setChipState(dom.micState, 'Mic enabled', 'active');
-      appendBubble('tool', 'Microphone permission granted.');
+      dom.sessionSummary.textContent = 'Microphone permission granted.';
     } catch {
       setChipState(dom.micState, 'Mic blocked', 'warn');
-      appendBubble('tool', 'Microphone permission was denied.');
+      dom.sessionSummary.textContent = 'Microphone permission was denied.';
     }
   };
 
   const interrupt = (): void => {
-    setChipState(dom.speakState, 'Interrupted', 'warn');
-    appendBubble('tool', 'User interrupted the agent. The backend should cancel the current response.');
+    void controller.interrupt();
+    setChipState(dom.voiceState, 'Interrupted', 'warn');
+    dom.voiceHint.textContent = 'The assistant audio was stopped immediately.';
   };
 
   const clearTranscript = (): void => {
     dom.transcript.innerHTML = '';
   };
 
-  const onConnect = (): void => {
-    void connect();
-  };
-
-  const onSend = (): void => {
-    void sendText();
-  };
-
-  const onMic = (): void => {
-    void enableMic();
+  const sendText = async (): Promise<void> => {
+    const text = dom.userText.value.trim();
+    if (!text) {
+      return;
+    }
+    try {
+      await controller.sendText(text);
+    } finally {
+      dom.userText.value = '';
+      renderStages();
+    }
   };
 
   const onLoad = (): void => {
     setChipState(dom.connectionState, 'Disconnected');
     setChipState(dom.micState, 'Mic off');
-    setChipState(dom.speakState, 'Idle');
-    syncBooking();
+    setChipState(dom.voiceState, 'Idle');
+    dom.voiceHint.textContent = 'Waiting for connection.';
+    renderStages();
     void refreshHealth();
   };
 
-  dom.connectBtn.addEventListener('click', onConnect);
-  dom.sendBtn.addEventListener('click', onSend);
-  dom.micBtn.addEventListener('click', onMic);
+  dom.connectBtn.addEventListener('click', () => { void connect(); });
+  dom.micBtn.addEventListener('click', () => { void enableMic(); });
   dom.interruptBtn.addEventListener('click', interrupt);
   dom.clearBtn.addEventListener('click', clearTranscript);
+  dom.sendBtn.addEventListener('click', () => { void sendText(); });
   window.addEventListener('load', onLoad, { once: true });
 
   if (document.readyState !== 'loading') {
@@ -333,12 +444,12 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
 
   return {
     destroy: () => {
-      dom.connectBtn.removeEventListener('click', onConnect);
-      dom.sendBtn.removeEventListener('click', onSend);
-      dom.micBtn.removeEventListener('click', onMic);
-      dom.interruptBtn.removeEventListener('click', interrupt);
-      dom.clearBtn.removeEventListener('click', clearTranscript);
-      window.removeEventListener('load', onLoad);
+      dom.connectBtn.replaceWith(dom.connectBtn.cloneNode(true));
+      dom.micBtn.replaceWith(dom.micBtn.cloneNode(true));
+      dom.interruptBtn.replaceWith(dom.interruptBtn.cloneNode(true));
+      dom.clearBtn.replaceWith(dom.clearBtn.cloneNode(true));
+      dom.sendBtn.replaceWith(dom.sendBtn.cloneNode(true));
+      void controller.dispose();
     },
   };
 };

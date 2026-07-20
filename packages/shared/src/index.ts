@@ -115,6 +115,9 @@ export const loadRuntimeConfig = (
   if (businessAdapterRaw !== 'mock' && businessAdapterRaw !== 'salonflow') {
     throw new Error('BUSINESS_ADAPTER must be either "mock" or "salonflow"');
   }
+  if ((env.NODE_ENV?.trim().toLowerCase() ?? '') === 'production' && businessAdapterRaw !== 'salonflow') {
+    throw new Error('BUSINESS_ADAPTER must equal "salonflow" in production');
+  }
 
   const portRaw = env.PORT ?? env.RECEPTIONIST_API_PORT ?? '8787';
   const receptionistApiPort = Number.parseInt(portRaw, 10);

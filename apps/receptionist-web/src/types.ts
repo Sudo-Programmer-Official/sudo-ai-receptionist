@@ -11,6 +11,26 @@ export type ToolStatus = {
   latencyMs?: number;
 };
 
+export type VoiceState =
+  | 'idle'
+  | 'connecting'
+  | 'listening'
+  | 'speaking'
+  | 'thinking'
+  | 'checking_availability'
+  | 'offering_slots'
+  | 'collecting_customer'
+  | 'confirming'
+  | 'booking'
+  | 'booked'
+  | 'error';
+
+export type LatencyMetric = {
+  name: string;
+  valueMs: number;
+  detail?: string;
+};
+
 export type BookingSlot = {
   slotId: string;
   startsAt: string;
@@ -20,13 +40,34 @@ export type BookingSlot = {
 };
 
 export type ConversationStateSnapshot = {
+  conversationId?: string;
+  businessId?: string;
   requestedService?: string;
+  serviceId?: string;
+  preferredDate?: string;
+  preferredTimeRange?: string;
+  staffPreference?: string;
   customerName?: string;
   customerPhone?: string;
   selectedSlot?: BookingSlot;
   proposedSlots?: BookingSlot[];
   bookingConfirmationStatus?: 'unconfirmed' | 'pending' | 'confirmed' | 'failed' | string;
-  conversationId?: string;
+  bookingId?: string;
+  businessProfile?: {
+    businessId: string;
+    name: string;
+    timezone: string;
+    phone?: string;
+    website?: string;
+    policies?: string[];
+  };
+  services?: Array<{
+    serviceId: string;
+    name: string;
+    durationMinutes: number;
+  }>;
+  lastUserMessage?: string;
+  lastAssistantMessage?: string;
 };
 
 export type ChatRequest = {
@@ -42,13 +83,33 @@ export type ChatResponse = {
   requiresUserAction: boolean;
 };
 
+export type BusinessContext = {
+  businessName: string;
+  serviceNames: string[];
+  timeZone?: string;
+  location?: string;
+  bookingPolicy?: string;
+};
+
 export type RealtimeSessionResponse = {
   businessId: string;
   conversationId: string;
+  sessionToken: string;
   ephemeralSessionToken: string;
   webrtcUrl: string;
   expiresAt: string;
   model?: string;
+  instructions?: string;
+  businessContext?: BusinessContext;
+};
+
+export type RealtimeCallResponse = {
+  answerSdp: string;
+  callId: string;
+  businessId: string;
+  conversationId: string;
+  model: string;
+  expiresAt: string;
 };
 
 export type FrontendEnv = {

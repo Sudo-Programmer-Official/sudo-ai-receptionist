@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, HealthResponse, RealtimeSessionResponse } from './types';
+import type { ChatRequest, ChatResponse, ConversationStateSnapshot, HealthResponse, RealtimeCallResponse, RealtimeSessionResponse } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -15,7 +15,8 @@ export class ApiError extends Error {
 export type ApiClient = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   getHealth: () => Promise<HealthResponse>;
-  createRealtimeSession: () => Promise<RealtimeSessionResponse>;
+  createRealtimeSession: (input?: { businessId?: string; state?: ConversationStateSnapshot }) => Promise<RealtimeSessionResponse>;
+  connectRealtimeCall: (input: { token: string; sdp: string }) => Promise<RealtimeCallResponse>;
   sendChat: (input: ChatRequest) => Promise<ChatResponse>;
 };
 
@@ -78,11 +79,21 @@ export const createApiClient = (config: ApiClientConfig): ApiClient => {
     }
   };
 
-  const createRealtimeSession = async (): Promise<RealtimeSessionResponse> =>
+  const createRealtimeSession = async (input?: { businessId?: string; state?: ConversationStateSnapshot }): Promise<RealtimeSessionResponse> =>
     requestJson<RealtimeSessionResponse>('/api/realtime/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        ...(input?.businessId ? { businessId: input.businessId } : {}),
+        ...(input?.state ? { state: input.state } : {}),
+      }),
+    });
+
+  const connectRealtimeCall = async (input: { token: string; sdp: string }): Promise<RealtimeCallResponse> =>
+    requestJson<RealtimeCallResponse>('/api/realtime/webrtc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
     });
 
   const sendChat = async (input: ChatRequest): Promise<ChatResponse> =>
@@ -100,6 +111,7 @@ export const createApiClient = (config: ApiClientConfig): ApiClient => {
     apiFetch,
     getHealth,
     createRealtimeSession,
+    connectRealtimeCall,
     sendChat,
   };
 };

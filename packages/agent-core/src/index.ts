@@ -4,6 +4,7 @@ import type {
   BusinessProfile,
   ServiceOffering
 } from '@sudo-ai-receptionist/business-contracts';
+import { performance } from 'node:perf_hooks';
 import {
   applyAssistantUpdate,
   createConversationState,
@@ -87,14 +88,29 @@ export class ReceptionistAgent {
     const lower = normalize(trimmed);
     let nextState = applyAssistantUpdate(state, { lastUserMessage: trimmed });
     const toolStatus: AgentTurnResult['toolStatus'] = [];
+    const timeTool = async <T>(name: string, operation: () => Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      try {
+        const result = await operation();
+        toolStatus.push({ name, status: 'ok', latencyMs: Math.round(performance.now() - startedAt) });
+        return result;
+      } catch (error) {
+        toolStatus.push({ name, status: 'error', latencyMs: Math.round(performance.now() - startedAt) });
+        throw error;
+      }
+    };
 
     if (!nextState.businessProfile) {
-      const businessProfile: BusinessProfile = await this.adapter.getBusinessProfile({ businessId: input.businessId, correlationId });
+      const businessProfile: BusinessProfile = await timeTool('getBusinessProfile', () =>
+        this.adapter.getBusinessProfile({ businessId: input.businessId, correlationId })
+      );
       nextState = applyAssistantUpdate(nextState, { businessProfile });
     }
 
     if (!nextState.services) {
-      const services = await this.adapter.listServices({ businessId: input.businessId, correlationId });
+      const services = await timeTool('listServices', () =>
+        this.adapter.listServices({ businessId: input.businessId, correlationId })
+      );
       nextState = applyAssistantUpdate(nextState, { services });
     }
 
@@ -131,16 +147,18 @@ export class ReceptionistAgent {
     }
 
     if (nextState.serviceId && nextState.proposedSlots.length === 0) {
-      const availability = await this.adapter.findAvailability({
-        businessId: input.businessId,
-        serviceId: nextState.serviceId,
-        preferredDate: nextState.preferredDate ?? '',
-        preferredTimeRange: nextState.preferredTimeRange,
-        staffPreference: nextState.staffPreference,
-        limit: 3,
-        correlationId
-      });
-      toolStatus.push({ name: 'findAvailability', status: 'ok' });
+      const serviceId = nextState.serviceId;
+      const availability = await timeTool('findAvailability', () =>
+        this.adapter.findAvailability({
+          businessId: input.businessId,
+          serviceId,
+          preferredDate: nextState.preferredDate ?? '',
+          preferredTimeRange: nextState.preferredTimeRange,
+          staffPreference: nextState.staffPreference,
+          limit: 3,
+          correlationId
+        })
+      );
       nextState = applyAssistantUpdate(nextState, { proposedSlots: availability.slots });
       if (availability.slots.length === 0) {
         return {
@@ -229,12 +247,14 @@ export class ReceptionistAgent {
     }
 
     if (nextState.bookingConfirmationStatus === 'pending' && wantsConfirmation(lower)) {
-      const customer = await this.adapter.findOrCreateCustomer({
-        businessId: input.businessId,
-        fullName: nextState.customerName ?? 'Customer',
-        phoneNumber: nextState.customerPhone ?? '',
-        correlationId
-      });
+      const customer = await timeTool('findOrCreateCustomer', () =>
+        this.adapter.findOrCreateCustomer({
+          businessId: input.businessId,
+          fullName: nextState.customerName ?? 'Customer',
+          phoneNumber: nextState.customerPhone ?? '',
+          correlationId
+        })
+      );
       const selectedSlot = nextState.selectedSlot ?? nextState.proposedSlots[0];
       if (!selectedSlot) {
         return {
@@ -244,24 +264,28 @@ export class ReceptionistAgent {
           requiresUserAction: true
         };
       }
-      const booking = await this.adapter.createBooking({
-        businessId: input.businessId,
-        serviceId: nextState.serviceId ?? '',
-        customerId: customer.customerId,
-        slotId: selectedSlot.slotId,
-        startsAt: selectedSlot.startsAt,
-        staffId: selectedSlot.staffId,
-        idempotencyKey: `${nextState.conversationId}:${selectedSlot.slotId}`,
-        correlationId
-      });
-      await this.adapter.sendConfirmation({
-        businessId: input.businessId,
-        bookingId: booking.bookingId,
-        customerPhone: customer.phoneNumber,
-        customerName: customer.fullName,
-        channel: nextState.channel,
-        correlationId
-      });
+      const booking = await timeTool('createBooking', () =>
+        this.adapter.createBooking({
+          businessId: input.businessId,
+          serviceId: nextState.serviceId ?? '',
+          customerId: customer.customerId,
+          slotId: selectedSlot.slotId,
+          startsAt: selectedSlot.startsAt,
+          staffId: selectedSlot.staffId,
+          idempotencyKey: `${nextState.conversationId}:${selectedSlot.slotId}`,
+          correlationId
+        })
+      );
+      await timeTool('sendConfirmation', () =>
+        this.adapter.sendConfirmation({
+          businessId: input.businessId,
+          bookingId: booking.bookingId,
+          customerPhone: customer.phoneNumber,
+          customerName: customer.fullName,
+          channel: nextState.channel,
+          correlationId
+        })
+      );
       nextState = applyAssistantUpdate(nextState, {
         bookingId: booking.bookingId,
         bookingConfirmationStatus: 'confirmed',

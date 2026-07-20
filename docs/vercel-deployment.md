@@ -14,6 +14,7 @@ Recommended Vercel project:
 
 - The frontend is now a static browser app built by Vite.
 - The browser talks to the backend only through `VITE_RECEPTIONIST_API_URL`.
+- The API enforces strict CORS using `ALLOWED_ORIGINS` plus localhost development origins.
 - The Vercel rewrites are for deployment convenience and SPA fallback only.
 
 ## Root-directory fallback
@@ -24,4 +25,3 @@ If workspace installation under the app root fails, deploy from the repository r
 - Install Command: `npm ci`
 - Build Command: `npm run build:web`
 - Output Directory: `apps/receptionist-web/dist`
-
