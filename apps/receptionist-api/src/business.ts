@@ -1,5 +1,6 @@
 export class BusinessIdMismatchError extends Error {
   readonly status = 403;
+  readonly code = 'business_not_allowed';
 
   constructor(
     public readonly requestedBusinessId: string,
@@ -10,28 +11,42 @@ export class BusinessIdMismatchError extends Error {
   }
 }
 
+export class ServerMisconfiguredError extends Error {
+  readonly status = 500;
+  readonly code = 'server_misconfigured';
+
+  constructor(public readonly configuredBusinessId: string) {
+    super('SERVER_MISCONFIGURED');
+    this.name = 'ServerMisconfiguredError';
+  }
+}
+
 export const resolveBusinessId = (input: {
   businessAdapter: 'mock' | 'salonflow';
-  configuredBusinessId: string;
+  configuredBusinessId: string | undefined;
   requestedBusinessId: string | undefined;
 }): string => {
   const requested = input.requestedBusinessId?.trim();
+  const configured = input.configuredBusinessId?.trim() ?? '';
 
   if (input.businessAdapter !== 'salonflow') {
-    return requested || input.configuredBusinessId;
+    return requested || configured || 'demo-salon';
   }
 
-  if (!input.configuredBusinessId.trim()) {
-    throw new Error('SALONFLOW_BUSINESS_ID is required');
+  if (!configured) {
+    throw new ServerMisconfiguredError(input.configuredBusinessId ?? '');
   }
 
   if (!requested) {
-    return input.configuredBusinessId;
+    return configured;
   }
 
-  if (requested !== input.configuredBusinessId) {
-    throw new BusinessIdMismatchError(requested, input.configuredBusinessId);
+  if (requested !== configured) {
+    throw new BusinessIdMismatchError(requested, configured);
   }
 
   return requested;
 };
+
+export const resolveChatText = (input: { text?: string; message?: string }): string =>
+  input.text?.trim() || input.message?.trim() || '';

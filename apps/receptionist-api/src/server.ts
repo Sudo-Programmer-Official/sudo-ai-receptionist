@@ -8,7 +8,7 @@ import { buildRealtimeInstructions, createSessionPayload, type RealtimeBusinessC
 import { createConversationState } from '@sudo-ai-receptionist/conversation-state';
 import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
 import { buildCorsHeaders, parseAllowedOrigins } from './cors.js';
-import { BusinessIdMismatchError, resolveBusinessId } from './business.js';
+import { BusinessIdMismatchError, ServerMisconfiguredError, resolveBusinessId, resolveChatText } from './business.js';
 import { resolveRealtimeBusinessContext } from './realtime.js';
 
 const runtime = loadRuntimeConfig(process.env);
@@ -86,8 +86,15 @@ const createSessionToken = (): string => `rt_${createCorrelationId()}`;
 
 const writeBusinessIdMismatch = (res: http.ServerResponse, error: BusinessIdMismatchError): void => {
   res.writeHead(403).end(JSON.stringify({
-    error: 'business_id_mismatch',
+    error: error.code,
     detail: `Requested businessId ${error.requestedBusinessId} does not match configured SalonFlow tenant.`,
+  }));
+};
+
+const writeServerMisconfigured = (res: http.ServerResponse, error: ServerMisconfiguredError): void => {
+  res.writeHead(500).end(JSON.stringify({
+    error: error.code,
+    detail: 'SALONFLOW_BUSINESS_ID is required.',
   }));
 };
 
@@ -170,7 +177,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/chat' && req.method === 'POST') {
-    const payload = await readJson(req) as { text?: string; state?: unknown; businessId?: string; interrupted?: boolean };
+    const payload = await readJson(req) as { text?: string; message?: string; state?: unknown; businessId?: string; interrupted?: boolean };
     try {
       const businessId = resolveBusinessId({
         businessAdapter: env.BUSINESS_ADAPTER,
@@ -178,7 +185,7 @@ const server = http.createServer(async (req, res) => {
         requestedBusinessId: payload.businessId,
       });
       const agentInput = {
-        text: payload.text ?? '',
+        text: resolveChatText(payload),
         ...(payload.state !== undefined ? { state: validateConversationState(payload.state) } : {}),
         businessId,
         correlationId,
@@ -190,6 +197,10 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       if (error instanceof BusinessIdMismatchError) {
         writeBusinessIdMismatch(res, error);
+        return;
+      }
+      if (error instanceof ServerMisconfiguredError) {
+        writeServerMisconfigured(res, error);
         return;
       }
       res.writeHead(500).end(JSON.stringify({ error: 'internal_error', detail: sanitizeErrorMessage(error) }));
@@ -248,6 +259,10 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       if (error instanceof BusinessIdMismatchError) {
         writeBusinessIdMismatch(res, error);
+        return;
+      }
+      if (error instanceof ServerMisconfiguredError) {
+        writeServerMisconfigured(res, error);
         return;
       }
       res.writeHead(500).end(JSON.stringify({ error: 'realtime_session_failed', detail: sanitizeErrorMessage(error) }));
