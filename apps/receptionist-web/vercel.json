@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://sudo-ai-receptionist-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://sudo-ai-receptionist-api.onrender.com/health"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

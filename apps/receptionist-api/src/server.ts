@@ -22,7 +22,7 @@ const env = {
 };
 
 if (!Number.isFinite(env.PORT) || env.PORT <= 0) {
-  throw new Error('Invalid RECEPTIONIST_API_PORT');
+  throw new Error('Invalid PORT or RECEPTIONIST_API_PORT');
 }
 
 const resolveBusinessId = (inputBusinessId?: string): string => {
@@ -79,7 +79,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === '/healthz') {
+  if (url.pathname === '/health' || url.pathname === '/healthz') {
     res.writeHead(200).end(JSON.stringify({ ok: true }));
     return;
   }
@@ -119,6 +119,6 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404).end(JSON.stringify({ error: 'not_found' }));
 });
 
-server.listen(env.PORT, () => {
+server.listen(env.PORT, '0.0.0.0', () => {
   console.log(`receptionist-api listening on http://localhost:${env.PORT}`);
 });

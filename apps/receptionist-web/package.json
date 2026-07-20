@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/dev-server.ts",
+    "dev": "vite",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json --noEmit"
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
-    "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "jsdom": "^26.1.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
   }
 }

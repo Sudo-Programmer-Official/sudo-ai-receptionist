@@ -116,10 +116,10 @@ export const loadRuntimeConfig = (
     throw new Error('BUSINESS_ADAPTER must be either "mock" or "salonflow"');
   }
 
-  const portRaw = env.RECEPTIONIST_API_PORT ?? '8787';
+  const portRaw = env.PORT ?? env.RECEPTIONIST_API_PORT ?? '8787';
   const receptionistApiPort = Number.parseInt(portRaw, 10);
   if (!Number.isFinite(receptionistApiPort) || receptionistApiPort <= 0) {
-    throw new Error('Invalid RECEPTIONIST_API_PORT');
+    throw new Error('Invalid PORT or RECEPTIONIST_API_PORT');
   }
 
   const openaiApiKey = options?.requireOpenAi ? readRequiredValue(env, 'OPENAI_API_KEY') : readOptionalValue(env, 'OPENAI_API_KEY');

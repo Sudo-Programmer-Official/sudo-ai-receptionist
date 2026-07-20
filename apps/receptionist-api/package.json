@@ -2,12 +2,13 @@
   "name": "@sudo-ai-receptionist/receptionist-api",
   "version": "0.1.0",
   "type": "module",
-  "main": "./src/server.ts",
-  "types": "./src/server.ts",
+  "main": "./dist/apps/receptionist-api/src/server.js",
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/apps/receptionist-api/src/server.js",
     "dev": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json --noEmit"
+    "build:api": "npm run build -ws --if-present"
   },
   "dependencies": {
     "@sudo-ai-receptionist/agent-core": "file:../../packages/agent-core",
