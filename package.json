@@ -31,9 +31,9 @@
     "format": "npm run format -ws --if-present"
   },
   "devDependencies": {
-    "@types/node": "^22.10.7",
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.8",
+    "@types/node": "22.10.7",
+    "typescript": "5.6.3",
+    "vitest": "2.1.8",
     "tsx": "^4.19.2"
   }
 }
