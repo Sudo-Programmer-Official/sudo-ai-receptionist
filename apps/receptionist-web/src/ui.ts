@@ -2,6 +2,9 @@ import type { ApiClient } from './api';
 import type {
   ConversationStateSnapshot,
   LatencyMetric,
+  MicState,
+  RealtimeConnectionState,
+  RealtimeDiagnostics,
   RealtimeSessionResponse,
   ToolStatus,
   VoiceState,
@@ -33,6 +36,7 @@ type AppDom = {
   metricsList: HTMLElement;
   readinessList: HTMLElement;
   readinessSummary: HTMLElement;
+  diagnosticsList: HTMLElement;
   stagePills: HTMLElement;
   userText: HTMLTextAreaElement;
   connectBtn: HTMLButtonElement;
@@ -47,8 +51,11 @@ type AppState = {
   conversation: ConversationStateSnapshot | null;
   session: RealtimeSessionResponse | null;
   voiceState: VoiceState;
+  connectionState: RealtimeConnectionState;
+  micState: MicState;
   toolStatus: ToolStatus[];
   metrics: LatencyMetric[];
+  diagnostics: RealtimeDiagnostics;
 };
 
 type StageMeta = {
@@ -120,6 +127,14 @@ const shellMarkup = `
               <div class="status-dot" id="toolDot"></div>
             </div>
             <div class="small" id="sessionSummary">No session started.</div>
+          </div>
+
+          <div class="card">
+            <div class="row-between">
+              <strong>WebRTC diagnostics</strong>
+              <div class="small">Temporary debug surface</div>
+            </div>
+            <div class="diagnostics-list" id="diagnosticsList"></div>
           </div>
 
           <div class="card">
@@ -243,6 +258,7 @@ const createDom = (root: HTMLElement): AppDom => {
     metricsList: get('metricsSummary'),
     readinessList: get('readinessList'),
     readinessSummary: get('readinessSummary'),
+    diagnosticsList: get('diagnosticsList'),
     stagePills: get('stagePills'),
     userText: get<HTMLTextAreaElement>('userText'),
     connectBtn: get<HTMLButtonElement>('connectBtn'),
@@ -262,6 +278,52 @@ const formatMetric = (metric: LatencyMetric): string => {
 const summarizeToolStatus = (items: ToolStatus[] | undefined): string =>
   items && items.length > 0 ? items.map((item) => `${item.name} ${item.latencyMs ? `(${item.latencyMs}ms)` : ''}`.trim()).join(' · ') : 'No tool calls yet.';
 
+const formatConnectionState = (state: RealtimeConnectionState): { label: string; mode?: 'active' | 'warn' | 'fail' } => {
+  switch (state) {
+    case 'api_connected':
+      return { label: 'API connected', mode: 'active' };
+    case 'session_created':
+      return { label: 'Session created', mode: 'warn' };
+    case 'webrtc_connecting':
+      return { label: 'WebRTC connecting', mode: 'warn' };
+    case 'webrtc_connected':
+      return { label: 'WebRTC connected', mode: 'active' };
+    case 'data_channel_open':
+      return { label: 'Data channel open', mode: 'active' };
+    case 'error':
+      return { label: 'Connection error', mode: 'fail' };
+    case 'idle':
+    default:
+      return { label: 'Disconnected' };
+  }
+};
+
+const formatMicState = (state: MicState): { label: string; mode?: 'active' | 'warn' | 'fail' } => {
+  switch (state) {
+    case 'requesting':
+      return { label: 'Mic requesting', mode: 'warn' };
+    case 'enabled':
+      return { label: 'Mic enabled', mode: 'active' };
+    case 'attached':
+      return { label: 'Mic attached', mode: 'active' };
+    case 'blocked':
+      return { label: 'Mic blocked', mode: 'fail' };
+    case 'off':
+    default:
+      return { label: 'Mic off' };
+  }
+};
+
+const formatDiagnosticsValue = (value: unknown): string => {
+  if (typeof value === 'boolean') {
+    return value ? 'yes' : 'no';
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value;
+  }
+  return 'none';
+};
+
 type ReadinessItem = {
   label: string;
   ready: boolean;
@@ -269,10 +331,13 @@ type ReadinessItem = {
 
 const buildReadinessItems = (state: AppState, dom: AppDom): ReadinessItem[] => [
   { label: 'Backend healthy', ready: dom.apiState.textContent?.toLowerCase().includes('healthy') ?? false },
-  { label: 'Mic permission granted', ready: dom.micState.textContent?.toLowerCase().includes('enabled') ?? false },
-  { label: 'Voice session connected', ready: Boolean(state.session) },
-  { label: 'Transcript captured', ready: dom.transcript.children.length > 0 },
-  { label: 'Booking confirmed', ready: state.conversation?.bookingConfirmationStatus === 'confirmed' },
+  { label: 'Session created', ready: ['session_created', 'webrtc_connecting', 'webrtc_connected', 'data_channel_open'].includes(state.connectionState) },
+  { label: 'WebRTC connected', ready: ['webrtc_connected', 'data_channel_open'].includes(state.connectionState) },
+  { label: 'Data channel open', ready: state.connectionState === 'data_channel_open' },
+  { label: 'Mic active', ready: ['enabled', 'attached'].includes(state.micState) },
+  { label: 'Listening', ready: ['listening', 'speaking', 'thinking'].includes(state.voiceState) },
+  { label: 'User transcript captured', ready: dom.transcript.querySelector('.bubble.user') !== null },
+  { label: 'Assistant audio received', ready: state.diagnostics.remoteAudioReceived },
 ];
 
 export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: () => void } => {
@@ -281,8 +346,20 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     conversation: null,
     session: null,
     voiceState: 'idle',
+    connectionState: 'idle',
+    micState: 'off',
     toolStatus: [],
     metrics: [],
+    diagnostics: {
+      peerConnectionState: 'idle',
+      iceConnectionState: 'idle',
+      signalingState: 'idle',
+      dataChannelState: 'closed',
+      localAudioTrackState: 'none',
+      remoteAudioReceived: false,
+      lastEventType: 'none',
+      lastErrorMessage: 'none',
+    },
   };
 
   const controller = new RealtimeVoiceController(
@@ -291,11 +368,57 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       onStateChange: (voiceState) => {
         state.voiceState = voiceState;
         const meta = stages.find((entry) => entry.state === voiceState) ?? stages[0]!;
-        setChipState(dom.voiceState, meta.label, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'active' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : 'active');
+        setChipState(
+          dom.voiceState,
+          meta.label,
+          voiceState === 'error'
+            ? 'fail'
+            : voiceState === 'booked'
+              ? 'active'
+              : voiceState === 'connecting' || voiceState === 'thinking'
+                ? 'warn'
+                : 'active',
+        );
         dom.voiceHint.textContent = meta.hint;
-        setStatusDot(dom.connectionDot, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'live' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : state.session ? 'live' : '');
+        setStatusDot(
+          dom.connectionDot,
+          voiceState === 'error'
+            ? 'fail'
+            : voiceState === 'booked'
+              ? 'live'
+              : voiceState === 'connecting' || voiceState === 'thinking'
+                ? 'warn'
+                : state.connectionState === 'data_channel_open' || state.connectionState === 'webrtc_connected'
+                  ? 'live'
+                  : state.connectionState === 'session_created' || state.connectionState === 'webrtc_connecting'
+                    ? 'warn'
+                    : '',
+        );
         updateConnectButton();
         renderStages();
+        renderReadiness();
+      },
+      onConnectionStateChange: (connectionState) => {
+        state.connectionState = connectionState;
+        const meta = formatConnectionState(connectionState);
+        setChipState(dom.connectionState, meta.label, meta.mode);
+        setStatusDot(
+          dom.connectionDot,
+          connectionState === 'error'
+            ? 'fail'
+            : connectionState === 'data_channel_open' || connectionState === 'webrtc_connected'
+              ? 'live'
+              : connectionState === 'session_created' || connectionState === 'webrtc_connecting'
+                ? 'warn'
+                : '',
+        );
+        updateConnectButton();
+        renderReadiness();
+      },
+      onMicStateChange: (micState) => {
+        state.micState = micState;
+        const meta = formatMicState(micState);
+        setChipState(dom.micState, meta.label, meta.mode);
         renderReadiness();
       },
       onTranscript: (role, text) => {
@@ -357,8 +480,28 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         }
         renderReadiness();
       },
+      onDiagnostics: (diagnostics) => {
+        state.diagnostics = diagnostics;
+        dom.diagnosticsList.innerHTML = '';
+        const rows: Array<[string, unknown]> = [
+          ['Peer connection', diagnostics.peerConnectionState],
+          ['ICE connection', diagnostics.iceConnectionState],
+          ['Signaling', diagnostics.signalingState],
+          ['Data channel', diagnostics.dataChannelState],
+          ['Local audio', diagnostics.localAudioTrackState],
+          ['Remote audio', diagnostics.remoteAudioReceived],
+          ['Last event', diagnostics.lastEventType],
+          ['Last error', diagnostics.lastErrorMessage],
+        ];
+        for (const [label, value] of rows) {
+          const row = document.createElement('div');
+          row.className = 'diagnostic-row';
+          row.innerHTML = `<span class="diagnostic-label">${label}</span><span class="diagnostic-value">${formatDiagnosticsValue(value)}</span>`;
+          dom.diagnosticsList.appendChild(row);
+        }
+        renderReadiness();
+      },
       onError: (message) => {
-        setChipState(dom.apiState, 'Error', 'fail');
         dom.sessionSummary.textContent = message;
         state.voiceState = 'error';
         setChipState(dom.voiceState, 'Error', 'fail');
@@ -409,13 +552,17 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       const health = await api.getHealth();
       const label = health.ok === false ? 'API degraded' : 'API healthy';
       setChipState(dom.apiState, label, 'active');
+      setChipState(dom.connectionState, 'API connected', 'active');
+      state.connectionState = 'api_connected';
       if (!state.session) {
         dom.sessionSummary.textContent = `Health check succeeded via /health${health.status ? ` (${health.status})` : ''}.`;
       }
-      setStatusDot(dom.connectionDot, state.session ? 'live' : '');
+      setStatusDot(dom.connectionDot, 'live');
       renderReadiness();
     } catch {
       setChipState(dom.apiState, 'API offline', 'fail');
+      setChipState(dom.connectionState, 'Disconnected');
+      state.connectionState = 'idle';
       if (!state.session) {
         dom.sessionSummary.textContent = 'Unable to reach the backend health endpoint.';
       }
@@ -429,15 +576,12 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       await disconnect();
       return;
     }
-    setChipState(dom.voiceState, 'Connecting', 'warn');
     state.voiceState = 'connecting';
     updateConnectButton();
     renderStages();
     try {
       const session = await controller.connect(state.conversation ?? undefined);
       state.session = session;
-      setChipState(dom.connectionState, 'Connected', 'active');
-      setStatusDot(dom.connectionDot, 'live');
       dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
       updateConnectButton();
       renderReadiness();
@@ -457,8 +601,11 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     await controller.disconnect();
     state.session = null;
     setChipState(dom.connectionState, 'Disconnected');
+    state.connectionState = 'idle';
     setChipState(dom.voiceState, 'Idle');
     state.voiceState = 'idle';
+    setChipState(dom.micState, 'Mic off');
+    state.micState = 'off';
     dom.voiceHint.textContent = 'Waiting for connection.';
     setStatusDot(dom.connectionDot, '');
     updateConnectButton();
@@ -468,12 +615,11 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
 
   const enableMic = async (): Promise<void> => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      setChipState(dom.micState, 'Mic enabled', 'active');
+      await controller.enableMic();
       dom.sessionSummary.textContent = 'Microphone permission granted.';
       renderReadiness();
     } catch {
-      setChipState(dom.micState, 'Mic blocked', 'warn');
+      setChipState(dom.micState, 'Mic blocked', 'fail');
       dom.sessionSummary.textContent = 'Microphone permission was denied.';
       renderReadiness();
     }

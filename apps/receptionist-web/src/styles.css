@@ -357,6 +357,33 @@ p {
   margin-top: 12px;
 }
 
+.diagnostics-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.diagnostic-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+
+.diagnostic-label {
+  color: var(--muted);
+}
+
+.diagnostic-value {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+
 .checklist {
   display: grid;
   gap: 8px;

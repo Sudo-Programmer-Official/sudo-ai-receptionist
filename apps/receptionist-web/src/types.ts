@@ -25,10 +25,37 @@ export type VoiceState =
   | 'booked'
   | 'error';
 
+export type RealtimeConnectionState =
+  | 'idle'
+  | 'api_connected'
+  | 'session_created'
+  | 'webrtc_connecting'
+  | 'webrtc_connected'
+  | 'data_channel_open'
+  | 'error';
+
+export type MicState =
+  | 'off'
+  | 'requesting'
+  | 'enabled'
+  | 'blocked'
+  | 'attached';
+
 export type LatencyMetric = {
   name: string;
   valueMs: number;
   detail?: string;
+};
+
+export type RealtimeDiagnostics = {
+  peerConnectionState: string;
+  iceConnectionState: string;
+  signalingState: string;
+  dataChannelState: string;
+  localAudioTrackState: string;
+  remoteAudioReceived: boolean;
+  lastEventType: string;
+  lastErrorMessage: string;
 };
 
 export type BookingSlot = {

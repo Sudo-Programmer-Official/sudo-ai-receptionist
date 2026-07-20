@@ -3,7 +3,9 @@ import type {
   ChatResponse,
   ConversationStateSnapshot,
   LatencyMetric,
-  RealtimeCallResponse,
+  MicState,
+  RealtimeConnectionState,
+  RealtimeDiagnostics,
   RealtimeSessionResponse,
   ToolStatus,
   VoiceState,
@@ -16,19 +18,24 @@ type RealtimeEvent = {
 
 type RealtimeVoiceEvents = {
   onStateChange: (state: VoiceState) => void;
+  onConnectionStateChange: (state: RealtimeConnectionState) => void;
+  onMicStateChange: (state: MicState) => void;
   onTranscript: (role: 'user' | 'assistant' | 'tool', text: string) => void;
   onSessionSummary: (summary: string) => void;
   onConversationState: (state: ConversationStateSnapshot) => void;
   onToolStatus: (toolStatus: ToolStatus[]) => void;
   onMetric: (metric: LatencyMetric) => void;
+  onDiagnostics: (diagnostics: RealtimeDiagnostics) => void;
   onError: (message: string) => void;
 };
 
 const DEFAULT_MODEL = 'gpt-realtime-2.1';
+const DEFAULT_VOICE = 'alloy';
 
 const safeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
-const joinLines = (values: Array<string | undefined>): string => values.filter((value): value is string => Boolean(value && value.trim())).join('\n');
+const joinLines = (values: Array<string | undefined>): string =>
+  values.filter((value): value is string => Boolean(value && value.trim())).join('\n');
 
 const inferVoiceState = (response: ChatResponse, fallback: VoiceState): VoiceState => {
   const message = response.message.toLowerCase();
@@ -67,11 +74,55 @@ const summarizeSession = (session: RealtimeSessionResponse): string => {
   return pieces.filter(Boolean).join(' · ');
 };
 
+const initialDiagnostics = (): RealtimeDiagnostics => ({
+  peerConnectionState: 'idle',
+  iceConnectionState: 'idle',
+  signalingState: 'idle',
+  dataChannelState: 'closed',
+  localAudioTrackState: 'none',
+  remoteAudioReceived: false,
+  lastEventType: 'none',
+  lastErrorMessage: 'none',
+});
+
+const summarizeTrack = (track: MediaStreamTrack | null | undefined, sender: RTCRtpSender | null): string => {
+  if (!track) {
+    return sender ? `sender:${sender.track?.readyState ?? 'attached'}` : 'none';
+  }
+
+  const senderState = sender?.track ? sender.track.readyState : 'missing';
+  return `kind=${track.kind}; enabled=${track.enabled}; ready=${track.readyState}; sender=${senderState}`;
+};
+
+const createSessionUpdatePayload = (session: RealtimeSessionResponse): Record<string, unknown> => ({
+  type: 'session.update',
+  session: {
+    instructions: session.instructions ?? '',
+    voice: DEFAULT_VOICE,
+    modalities: ['audio'],
+    tools: [],
+    tool_choice: 'none',
+    turn_detection: {
+      type: 'server_vad',
+      create_response: true,
+      interrupt_response: true,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 350,
+      threshold: 0.5,
+    },
+    input_audio_transcription: {
+      model: 'gpt-4o-mini-transcribe',
+      language: 'en',
+    },
+  },
+});
+
 export class RealtimeVoiceController {
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
+  private micSender: RTCRtpSender | null = null;
   private session: RealtimeSessionResponse | null = null;
   private conversationState: ConversationStateSnapshot | null = null;
   private processedTranscripts = new Set<string>();
@@ -80,6 +131,17 @@ export class RealtimeVoiceController {
   private assistantSpeaking = false;
   private activeRequestId = 0;
   private destroyed = false;
+  private connectingPromise: Promise<RealtimeSessionResponse> | null = null;
+  private resolveReady: (() => void) | null = null;
+  private rejectReady: ((error: Error) => void) | null = null;
+  private readyPromise: Promise<void> | null = null;
+  private peerConnectionOpen = false;
+  private dataChannelOpen = false;
+  private micAttached = false;
+  private connectionState: RealtimeConnectionState = 'idle';
+  private micState: MicState = 'off';
+  private diagnostics: RealtimeDiagnostics = initialDiagnostics();
+  private isDisconnecting = false;
 
   constructor(
     private readonly api: ApiClient,
@@ -95,116 +157,42 @@ export class RealtimeVoiceController {
     return this.session;
   }
 
+  getConnectionState(): RealtimeConnectionState {
+    return this.connectionState;
+  }
+
+  getMicState(): MicState {
+    return this.micState;
+  }
+
+  getDiagnostics(): RealtimeDiagnostics {
+    return this.diagnostics;
+  }
+
   async connect(initialState?: ConversationStateSnapshot): Promise<RealtimeSessionResponse> {
-    this.events.onStateChange('connecting');
-    this.events.onSessionSummary('Requesting a short-lived realtime session from the backend...');
-    const sessionStartedAt = performance.now();
-    const resolvedState = initialState ?? this.conversationState ?? null;
-
-    const session = await this.api.createRealtimeSession({
-      ...(resolvedState ? { state: resolvedState } : {}),
-    });
-
-    if (this.destroyed) {
-      return session;
+    if (this.connectingPromise) {
+      return this.connectingPromise;
     }
 
-    this.session = session;
-    this.conversationState = resolvedState;
-    this.events.onSessionSummary(summarizeSession(session));
-    this.events.onMetric({ name: 'realtime session startup latency', valueMs: Math.round(performance.now() - sessionStartedAt), detail: 'session bootstrap' });
-
-    await this.ensureMedia();
-
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    this.destroyed = false;
+    this.connectingPromise = this.connectInternal(initialState).catch((error: unknown) => {
+      if (this.connectionState !== 'error') {
+        this.setConnectionFailure(error instanceof Error ? error.message : 'Failed to start realtime session.');
+      }
+      throw error;
+    }).finally(() => {
+      this.connectingPromise = null;
     });
-    this.pc = pc;
-    this.remoteStream = new MediaStream();
+    return this.connectingPromise;
+  }
 
-    pc.ontrack = (event) => {
-      for (const track of event.streams[0]?.getTracks() ?? []) {
-        if (!this.remoteStream?.getTracks().some((existing) => existing.id === track.id)) {
-          this.remoteStream?.addTrack(track);
-        }
-      }
-      this.audioElement.srcObject = this.remoteStream;
-      void this.audioElement.play().catch(() => undefined);
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') {
-        this.events.onStateChange('listening');
-        this.events.onMetric({
-          name: 'session startup latency',
-          valueMs: Math.round(performance.now() - sessionStartedAt),
-          detail: 'peer connection connected',
-        });
-      }
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        this.events.onStateChange('error');
-        this.events.onError(`WebRTC connection ${pc.connectionState}.`);
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed') {
-        this.events.onStateChange('error');
-        this.events.onError('ICE negotiation failed.');
-      }
-    };
-
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
-        pc.addTrack(track, this.localStream);
-      }
+  async enableMic(): Promise<void> {
+    await this.ensureLocalStream();
+    this.events.onMicStateChange(this.localStream ? 'enabled' : 'off');
+    await this.attachLocalStreamToPeerConnection();
+    if (this.pc && this.dataChannel) {
+      this.events.onMicStateChange('attached');
     }
-
-    this.dataChannel = pc.createDataChannel('oai-events');
-    this.dataChannel.onopen = () => {
-      this.events.onSessionSummary(`${summarizeSession(session)} · voice ready`);
-    };
-    this.dataChannel.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(String(event.data)) as RealtimeEvent;
-        this.handleEvent(parsed).catch((error) => {
-          this.events.onError(error instanceof Error ? error.message : 'Realtime event handling failed.');
-        });
-      } catch {
-        // Ignore malformed frames from the service.
-      }
-    };
-    this.dataChannel.onerror = () => {
-      this.events.onError('Realtime data channel error.');
-    };
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await this.waitForIceGatheringComplete(pc);
-
-    const localOffer = pc.localDescription?.sdp;
-    if (!localOffer) {
-      throw new Error('Failed to create SDP offer.');
-    }
-
-    const answer = await this.api.connectRealtimeCall({
-      token: session.sessionToken,
-      sdp: localOffer,
-    });
-
-    if (this.destroyed) {
-      return session;
-    }
-
-    await pc.setRemoteDescription({ type: 'answer', sdp: answer.answerSdp });
-    this.events.onSessionSummary(`${summarizeSession(session)} · call ${answer.callId}`);
-    this.events.onMetric({
-      name: 'realtime call setup latency',
-      valueMs: Math.round(performance.now() - sessionStartedAt),
-      detail: 'sdp exchange complete',
-    });
-
-    return session;
   }
 
   async sendText(text: string): Promise<ChatResponse> {
@@ -215,22 +203,37 @@ export class RealtimeVoiceController {
     this.activeRequestId += 1;
     this.pendingAudioStartAt = null;
     this.assistantSpeaking = false;
+    this.isDisconnecting = true;
+    if (this.rejectReady) {
+      this.rejectReady(new Error('Voice session disconnected.'));
+    }
     this.sendEvent({ type: 'response.cancel' });
     this.sendEvent({ type: 'output_audio_buffer.clear' });
     this.dataChannel?.close();
-    this.pc?.getSenders().forEach((sender) => sender.track?.stop());
     this.pc?.close();
     this.localStream?.getTracks().forEach((track) => track.stop());
+    this.localStream = null;
     this.audioElement.pause();
     this.audioElement.currentTime = 0;
     this.audioElement.srcObject = null;
-    this.pc = null;
-    this.dataChannel = null;
-    this.localStream = null;
-    this.remoteStream = null;
+    this.resetConnectionReferences();
     this.session = null;
+    this.connectionState = 'idle';
+    this.micState = 'off';
+    this.updateDiagnostics({
+      peerConnectionState: 'closed',
+      iceConnectionState: 'closed',
+      signalingState: 'closed',
+      dataChannelState: 'closed',
+      localAudioTrackState: 'none',
+      remoteAudioReceived: false,
+      lastErrorMessage: 'none',
+    });
+    this.events.onConnectionStateChange('idle');
+    this.events.onMicStateChange('off');
     this.events.onStateChange('idle');
     this.events.onSessionSummary('Voice session disconnected.');
+    this.isDisconnecting = false;
   }
 
   async interrupt(): Promise<void> {
@@ -248,11 +251,230 @@ export class RealtimeVoiceController {
     await this.disconnect();
   }
 
-  private async ensureMedia(): Promise<void> {
+  private async connectInternal(initialState?: ConversationStateSnapshot): Promise<RealtimeSessionResponse> {
+    this.events.onConnectionStateChange('api_connected');
+    this.events.onStateChange('connecting');
+    this.events.onSessionSummary('Requesting a short-lived realtime session from the backend...');
+    const sessionStartedAt = performance.now();
+    const resolvedState = initialState ?? this.conversationState ?? null;
+
+    const session = await this.api.createRealtimeSession({
+      ...(resolvedState ? { state: resolvedState } : {}),
+    });
+
+    if (this.destroyed) {
+      return session;
+    }
+
+    this.session = session;
+    this.conversationState = resolvedState;
+    this.processedTranscripts.clear();
+    this.pendingAudioStartAt = null;
+    this.lastSpeechEndAt = null;
+    this.assistantSpeaking = false;
+    this.peerConnectionOpen = false;
+    this.dataChannelOpen = false;
+    this.micAttached = false;
+    this.events.onConnectionStateChange('session_created');
+    this.events.onSessionSummary(summarizeSession(session));
+    this.events.onMetric({
+      name: 'realtime session startup latency',
+      valueMs: Math.round(performance.now() - sessionStartedAt),
+      detail: 'session bootstrap',
+    });
+
+    this.resetConnectionReferences();
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+    this.pc = pc;
+    this.remoteStream = new MediaStream();
+    this.audioElement.srcObject = this.remoteStream;
+    this.events.onConnectionStateChange('webrtc_connecting');
+    this.updateDiagnostics();
+    this.attachPeerConnectionHandlers(pc, sessionStartedAt);
+
+    await this.ensureLocalStream();
+    await this.attachLocalStreamToPeerConnection();
+
+    this.dataChannel = pc.createDataChannel('oai-events');
+    this.attachDataChannelHandlers(this.dataChannel);
+    this.updateDiagnostics();
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await this.waitForIceGatheringComplete(pc);
+
+    const localOffer = pc.localDescription?.sdp;
+    if (!localOffer) {
+      throw new Error('Failed to create SDP offer.');
+    }
+
+    const answer = await this.api.connectRealtimeCall({
+      token: session.sessionToken,
+      sdp: localOffer,
+    });
+
+    if (this.destroyed || this.pc !== pc) {
+      return session;
+    }
+
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer.answerSdp });
+    this.events.onSessionSummary(`${summarizeSession(session)} · call ${answer.callId}`);
+    this.events.onMetric({
+      name: 'realtime call setup latency',
+      valueMs: Math.round(performance.now() - sessionStartedAt),
+      detail: 'sdp exchange complete',
+    });
+
+    await this.waitForConnectionReady();
+    if (this.destroyed || this.pc !== pc) {
+      return session;
+    }
+
+    this.sendEvent(createSessionUpdatePayload(session));
+    this.events.onStateChange('listening');
+    this.pendingAudioStartAt = performance.now();
+    this.assistantSpeaking = false;
+    this.sendEvent({ type: 'response.create' });
+
+    return session;
+  }
+
+  private async ensureLocalStream(): Promise<MediaStream> {
     if (this.localStream) {
+      return this.localStream;
+    }
+
+    this.micState = 'requesting';
+    this.events.onMicStateChange(this.micState);
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.micState = 'enabled';
+      this.events.onMicStateChange(this.micState);
+      this.updateDiagnostics();
+      return this.localStream;
+    } catch (error) {
+      this.micState = 'blocked';
+      this.events.onMicStateChange(this.micState);
+      this.setLastError(error instanceof Error ? error.message : 'Microphone permission was denied.');
+      throw error instanceof Error ? error : new Error('Microphone permission was denied.');
+    }
+  }
+
+  private async attachLocalStreamToPeerConnection(): Promise<void> {
+    if (!this.pc || !this.localStream) {
       return;
     }
-    this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    const tracks = this.localStream.getAudioTracks();
+    if (tracks.length === 0) {
+      throw new Error('No microphone audio track available.');
+    }
+
+    for (const track of tracks) {
+      if (track.kind !== 'audio') {
+        continue;
+      }
+      if (this.micSender?.track?.id === track.id) {
+        continue;
+      }
+      if (this.micSender && !this.micSender.track) {
+        await this.micSender.replaceTrack(track);
+      } else {
+        this.micSender = this.pc.addTrack(track, this.localStream);
+      }
+    }
+
+    this.micAttached = true;
+    this.micState = 'attached';
+    this.events.onMicStateChange(this.micState);
+    this.updateDiagnostics();
+    this.resolveReadyIfPossible();
+  }
+
+  private attachPeerConnectionHandlers(pc: RTCPeerConnection, sessionStartedAt: number): void {
+    pc.ontrack = (event) => {
+      this.diagnostics.remoteAudioReceived = true;
+      const track = event.track;
+      if (track && this.remoteStream && !this.remoteStream.getTracks().some((existing) => existing.id === track.id)) {
+        this.remoteStream.addTrack(track);
+      }
+      this.audioElement.srcObject = this.remoteStream;
+      void this.audioElement.play().catch(() => undefined);
+      this.updateDiagnostics();
+    };
+
+    pc.onconnectionstatechange = () => {
+      this.diagnostics.peerConnectionState = pc.connectionState;
+      if (pc.connectionState === 'connected') {
+        this.peerConnectionOpen = true;
+        this.events.onConnectionStateChange('webrtc_connected');
+        this.events.onMetric({
+          name: 'session startup latency',
+          valueMs: Math.round(performance.now() - sessionStartedAt),
+          detail: 'peer connection connected',
+        });
+        this.resolveReadyIfPossible();
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        this.setConnectionFailure(`WebRTC connection ${pc.connectionState}.`);
+      }
+      this.updateDiagnostics();
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      this.diagnostics.iceConnectionState = pc.iceConnectionState;
+      if (pc.iceConnectionState === 'failed') {
+        this.setConnectionFailure('ICE negotiation failed.');
+      }
+      this.updateDiagnostics();
+    };
+
+    pc.onsignalingstatechange = () => {
+      this.diagnostics.signalingState = pc.signalingState;
+      this.updateDiagnostics();
+    };
+  }
+
+  private attachDataChannelHandlers(dataChannel: RTCDataChannel): void {
+    dataChannel.onopen = () => {
+      this.diagnostics.dataChannelState = dataChannel.readyState;
+      this.dataChannelOpen = true;
+      this.events.onConnectionStateChange('data_channel_open');
+      this.events.onSessionSummary(`${this.session ? summarizeSession(this.session) : 'Realtime session'} · voice ready`);
+      this.updateDiagnostics();
+      this.resolveReadyIfPossible();
+    };
+
+    dataChannel.onclose = () => {
+      this.diagnostics.dataChannelState = dataChannel.readyState;
+      this.updateDiagnostics();
+      if (!this.isDisconnecting) {
+        this.setConnectionFailure('Realtime data channel closed.');
+      }
+    };
+
+    dataChannel.onerror = () => {
+      this.diagnostics.dataChannelState = dataChannel.readyState;
+      this.updateDiagnostics();
+      if (!this.isDisconnecting) {
+        this.setConnectionFailure('Realtime data channel error.');
+      }
+    };
+
+    dataChannel.onmessage = (event) => {
+      this.diagnostics.lastEventType = 'datachannel.message';
+      this.updateDiagnostics();
+      try {
+        const parsed = JSON.parse(String(event.data)) as RealtimeEvent;
+        this.handleEvent(parsed).catch((error) => {
+          this.setConnectionFailure(error instanceof Error ? error.message : 'Realtime event handling failed.');
+        });
+      } catch {
+        // Ignore malformed frames from the service.
+      }
+    };
   }
 
   private sendEvent(payload: Record<string, unknown>): void {
@@ -277,13 +499,134 @@ export class RealtimeVoiceController {
     });
   }
 
+  private waitForConnectionReady(): Promise<void> {
+    if (this.connectionIsReady()) {
+      return Promise.resolve();
+    }
+
+    if (!this.readyPromise) {
+      this.readyPromise = new Promise<void>((resolve, reject) => {
+        this.resolveReady = () => {
+          this.readyPromise = null;
+          this.resolveReady = null;
+          this.rejectReady = null;
+          resolve();
+        };
+        this.rejectReady = (error: Error) => {
+          this.readyPromise = null;
+          this.resolveReady = null;
+          this.rejectReady = null;
+          reject(error);
+        };
+      });
+    }
+
+    return this.readyPromise;
+  }
+
+  private connectionIsReady(): boolean {
+    return Boolean(
+      this.pc &&
+      this.dataChannel &&
+      this.pc.connectionState === 'connected' &&
+      this.dataChannel.readyState === 'open' &&
+      this.micAttached,
+    );
+  }
+
+  private resolveReadyIfPossible(): void {
+    if (!this.connectionIsReady() || !this.resolveReady) {
+      return;
+    }
+    this.resolveReady();
+  }
+
+  private updateDiagnostics(partial?: Partial<RealtimeDiagnostics>): void {
+    const localTrack = this.localStream?.getAudioTracks().find((track) => track.kind === 'audio') ?? null;
+    this.diagnostics = {
+      peerConnectionState: this.pc?.connectionState ?? 'closed',
+      iceConnectionState: this.pc?.iceConnectionState ?? 'closed',
+      signalingState: this.pc?.signalingState ?? 'closed',
+      dataChannelState: this.dataChannel?.readyState ?? 'closed',
+      localAudioTrackState: summarizeTrack(localTrack, this.micSender),
+      remoteAudioReceived: this.diagnostics.remoteAudioReceived,
+      lastEventType: this.diagnostics.lastEventType,
+      lastErrorMessage: this.diagnostics.lastErrorMessage,
+      ...partial,
+    };
+    this.events.onDiagnostics({ ...this.diagnostics });
+  }
+
+  private setLastError(message: string): void {
+    this.diagnostics.lastErrorMessage = message;
+    this.updateDiagnostics();
+  }
+
+  private setConnectionFailure(message: string): void {
+    this.setLastError(message);
+    if (this.rejectReady) {
+      this.rejectReady(new Error(message));
+    }
+    this.cleanupConnectionResources(true);
+    this.session = null;
+    this.connectionState = 'error';
+    if (this.micState !== 'blocked') {
+      this.micState = 'off';
+      this.events.onMicStateChange('off');
+    }
+    this.events.onConnectionStateChange('error');
+    this.events.onStateChange('error');
+    this.events.onError(message);
+  }
+
+  private cleanupConnectionResources(stopTracks: boolean): void {
+    this.isDisconnecting = true;
+    try {
+      this.sendEvent({ type: 'response.cancel' });
+      this.sendEvent({ type: 'output_audio_buffer.clear' });
+      if (stopTracks) {
+        this.localStream?.getTracks().forEach((track) => track.stop());
+        this.localStream = null;
+      }
+      this.dataChannel?.close();
+      this.pc?.close();
+      this.audioElement.pause();
+      this.audioElement.currentTime = 0;
+      this.audioElement.srcObject = null;
+    } finally {
+      this.resetConnectionReferences();
+      this.isDisconnecting = false;
+      this.peerConnectionOpen = false;
+      this.dataChannelOpen = false;
+      this.micAttached = false;
+      this.updateDiagnostics({
+        dataChannelState: 'closed',
+        peerConnectionState: this.pc?.connectionState ?? 'closed',
+      });
+    }
+  }
+
+  private resetConnectionReferences(): void {
+    this.pc = null;
+    this.dataChannel = null;
+    this.remoteStream = null;
+    this.micSender = null;
+    this.resolveReady = null;
+    this.rejectReady = null;
+    this.readyPromise = null;
+  }
+
   private async handleEvent(event: RealtimeEvent): Promise<void> {
-    switch (event.type) {
+    const type = safeText(event.type) || 'unknown';
+    this.diagnostics.lastEventType = type;
+    this.updateDiagnostics();
+
+    switch (type) {
       case 'session.created':
       case 'session.updated':
         this.events.onSessionSummary(joinLines([
           this.session ? summarizeSession(this.session) : undefined,
-          event.type === 'session.updated' ? 'session updated' : undefined,
+          type === 'session.updated' ? 'session updated' : undefined,
         ]));
         return;
       case 'input_audio_buffer.speech_started':
@@ -328,8 +671,7 @@ export class RealtimeVoiceController {
         this.events.onStateChange('listening');
         return;
       case 'error':
-        this.events.onStateChange('error');
-        this.events.onError(safeText((event as { error?: { message?: string } }).error?.message) || 'Realtime error');
+        this.setConnectionFailure(safeText((event as { error?: { message?: string } }).error?.message) || 'Realtime error');
         return;
       default:
         return;
@@ -380,8 +722,7 @@ export class RealtimeVoiceController {
       this.events.onTranscript('assistant', response.message);
       await this.speak(response.message);
     } catch (error) {
-      this.events.onStateChange('error');
-      this.events.onError(error instanceof Error ? error.message : 'The backend request failed.');
+      this.setConnectionFailure(error instanceof Error ? error.message : 'The backend request failed.');
     }
   }
 
@@ -457,7 +798,7 @@ export class RealtimeVoiceController {
 export const requestRealtimeSession = (api: ApiClient, input?: { businessId?: string; state?: ConversationStateSnapshot }): Promise<RealtimeSessionResponse> =>
   api.createRealtimeSession(input);
 
-export const connectRealtimeCall = (api: ApiClient, input: { token: string; sdp: string }): Promise<RealtimeCallResponse> =>
+export const connectRealtimeCall = (api: ApiClient, input: { token: string; sdp: string }) =>
   api.connectRealtimeCall(input);
 
 export const formatRealtimeSessionSummary = (session: RealtimeSessionResponse): string => summarizeSession(session);
