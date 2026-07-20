@@ -6,6 +6,7 @@ import type {
   BusinessProfile,
   ConfirmationDeliveryResult,
   CustomerRecord,
+  StaffMember,
   ServiceOffering
 } from '@sudo-ai-receptionist/business-contracts';
 
@@ -48,6 +49,14 @@ export class MockBusinessAdapter implements BusinessAdapter {
 
   async listServices(input: { businessId: string; correlationId: string; signal?: AbortSignal | undefined }): Promise<ServiceOffering[]> {
     return services;
+  }
+
+  async listStaff(input: { businessId: string; correlationId: string; signal?: AbortSignal | undefined }): Promise<StaffMember[]> {
+    return staff.map((member) => ({
+      staffId: member.staffId,
+      name: member.name,
+      services: member.services,
+    }));
   }
 
   async findAvailability(input: {

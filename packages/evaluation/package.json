@@ -7,13 +7,18 @@
   "scripts": {
     "eval": "tsx src/cli.ts",
     "demo:text": "tsx src/demo-text.ts",
+    "verify:salonflow": "tsx src/salonflow-verify.ts",
+    "demo:salonflow-booking": "tsx src/salonflow-booking.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@sudo-ai-receptionist/agent-core": "file:../agent-core",
+    "@sudo-ai-receptionist/business-contracts": "file:../business-contracts",
     "@sudo-ai-receptionist/conversation-state": "file:../conversation-state",
-    "@sudo-ai-receptionist/mock-business": "file:../../integrations/mock-business"
+    "@sudo-ai-receptionist/mock-business": "file:../../integrations/mock-business",
+    "@sudo-ai-receptionist/salonflow": "file:../../integrations/salonflow",
+    "@sudo-ai-receptionist/shared": "file:../shared"
   }
 }

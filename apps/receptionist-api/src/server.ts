@@ -1,24 +1,46 @@
 import http from 'node:http';
 import { createAgent } from '@sudo-ai-receptionist/agent-core';
 import { MockBusinessAdapter } from '@sudo-ai-receptionist/mock-business';
-import { createCorrelationId, redactPersonData, sanitizeErrorMessage, validateEnvironment } from '@sudo-ai-receptionist/shared';
+import { SalonFlowAdapter } from '@sudo-ai-receptionist/salonflow';
+import { createCorrelationId, loadRuntimeConfig, redactPersonData, sanitizeErrorMessage } from '@sudo-ai-receptionist/shared';
 import { validateConversationState } from '@sudo-ai-receptionist/conversation-state';
 
-const adapter = new MockBusinessAdapter();
+const runtime = loadRuntimeConfig(process.env);
+const adapter =
+  runtime.businessAdapter === 'salonflow'
+    ? new SalonFlowAdapter({
+        baseUrl: runtime.salonflowBaseUrl ?? '',
+        integrationToken: runtime.salonflowIntegrationToken ?? '',
+      })
+    : new MockBusinessAdapter();
 const agent = createAgent(adapter);
 const requestCounts = new Map<string, { count: number; windowStart: number }>();
 const env = {
-  PORT: Number(process.env.RECEPTIONIST_API_PORT ?? '8787'),
-  BUSINESS_ADAPTER: process.env.BUSINESS_ADAPTER ?? 'mock'
+  PORT: runtime.receptionistApiPort,
+  BUSINESS_ADAPTER: runtime.businessAdapter,
+  BUSINESS_ID: runtime.businessAdapter === 'salonflow' ? runtime.salonflowBusinessId ?? '' : 'demo-salon'
 };
 
 if (!Number.isFinite(env.PORT) || env.PORT <= 0) {
   throw new Error('Invalid RECEPTIONIST_API_PORT');
 }
 
-if (env.BUSINESS_ADAPTER === 'salonflow') {
-  validateEnvironment(process.env, ['SALONFLOW_BASE_URL', 'SALONFLOW_INTEGRATION_TOKEN']);
-}
+const resolveBusinessId = (inputBusinessId?: string): string => {
+  const requested = inputBusinessId?.trim();
+  if (env.BUSINESS_ADAPTER !== 'salonflow') {
+    return requested || env.BUSINESS_ID;
+  }
+  if (!env.BUSINESS_ID) {
+    throw new Error('SALONFLOW_BUSINESS_ID is required');
+  }
+  if (!requested) {
+    return env.BUSINESS_ID;
+  }
+  if (requested !== env.BUSINESS_ID) {
+    throw new Error('BUSINESS_ID_MISMATCH');
+  }
+  return requested;
+};
 
 const readJson = async (req: http.IncomingMessage): Promise<unknown> => {
   let body = '';
@@ -65,10 +87,11 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/chat' && req.method === 'POST') {
     const payload = await readJson(req) as { text?: string; state?: unknown; businessId?: string; interrupted?: boolean };
     try {
+      const businessId = resolveBusinessId(payload.businessId);
       const agentInput = {
         text: payload.text ?? '',
         ...(payload.state !== undefined ? { state: validateConversationState(payload.state) } : {}),
-        businessId: payload.businessId ?? 'demo-salon',
+        businessId,
         correlationId,
         channel: 'web' as const,
         ...(payload.interrupted !== undefined ? { interrupted: payload.interrupted } : {})
@@ -82,8 +105,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/realtime/session' && req.method === 'POST') {
+    const businessId = resolveBusinessId(undefined);
     res.writeHead(200).end(JSON.stringify({
-      businessId: 'demo-salon',
+      businessId,
       conversationId: correlationId,
       ephemeralSessionToken: `ephemeral_${correlationId}`,
       webrtcUrl: '/api/realtime/webrtc',

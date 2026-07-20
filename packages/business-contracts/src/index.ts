@@ -81,6 +81,7 @@ export interface BookingRecord {
   startsAt: string;
   status: 'confirmed' | 'pending' | 'failed';
   externalReference?: string | undefined;
+  summary?: string | undefined;
 }
 
 export interface ConfirmationDeliveryRequest {
@@ -101,6 +102,7 @@ export interface ConfirmationDeliveryResult {
 export interface BusinessAdapter {
   getBusinessProfile(input: { businessId: string; correlationId: string; signal?: AbortSignal }): Promise<BusinessProfile>;
   listServices(input: { businessId: string; correlationId: string; signal?: AbortSignal }): Promise<ServiceOffering[]>;
+  listStaff(input: { businessId: string; correlationId: string; signal?: AbortSignal }): Promise<StaffMember[]>;
   findAvailability(input: AvailabilityRequest): Promise<AvailabilityResult>;
   findOrCreateCustomer(input: {
     businessId: string;

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@sudo-ai-receptionist/agent-core": "file:../../packages/agent-core",
+    "@sudo-ai-receptionist/salonflow": "file:../../integrations/salonflow",
     "@sudo-ai-receptionist/mock-business": "file:../../integrations/mock-business",
     "@sudo-ai-receptionist/realtime-runtime": "file:../../packages/realtime-runtime",
     "@sudo-ai-receptionist/shared": "file:../../packages/shared"

@@ -63,6 +63,91 @@ export const sanitizeErrorMessage = (error: unknown): string => {
   return 'Unknown error';
 };
 
+export type RuntimeAdapter = 'mock' | 'salonflow';
+
+export type RuntimeConfig = {
+  businessAdapter: RuntimeAdapter;
+  receptionistApiPort: number;
+  salonflowBaseUrl?: string;
+  salonflowIntegrationToken?: string;
+  salonflowBusinessId?: string;
+  openaiApiKey?: string | undefined;
+  openaiRealtimeModel?: string | undefined;
+};
+
+const isPlaceholderValue = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === 'replace-me' ||
+    normalized === 'demo-tenant' ||
+    normalized.includes('staging.salonflow.example') ||
+    normalized.includes('example.com') ||
+    normalized.includes('todo') ||
+    normalized.includes('changeme')
+  );
+};
+
+const readRequiredValue = (env: Record<string, string | undefined>, key: string): string => {
+  const value = env[key];
+  if (!value || !value.trim()) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+  if (isPlaceholderValue(value)) {
+    throw new Error(`Environment variable ${key} still contains a placeholder value`);
+  }
+  return value.trim();
+};
+
+const readOptionalValue = (env: Record<string, string | undefined>, key: string): string | undefined => {
+  const value = env[key];
+  if (!value || !value.trim()) return undefined;
+  if (isPlaceholderValue(value)) {
+    throw new Error(`Environment variable ${key} still contains a placeholder value`);
+  }
+  return value.trim();
+};
+
+export const loadRuntimeConfig = (
+  env: Record<string, string | undefined>,
+  options?: { requireOpenAi?: boolean },
+): RuntimeConfig => {
+  const businessAdapterRaw = env.BUSINESS_ADAPTER?.trim().toLowerCase() || 'mock';
+  if (businessAdapterRaw !== 'mock' && businessAdapterRaw !== 'salonflow') {
+    throw new Error('BUSINESS_ADAPTER must be either "mock" or "salonflow"');
+  }
+
+  const portRaw = env.RECEPTIONIST_API_PORT ?? '8787';
+  const receptionistApiPort = Number.parseInt(portRaw, 10);
+  if (!Number.isFinite(receptionistApiPort) || receptionistApiPort <= 0) {
+    throw new Error('Invalid RECEPTIONIST_API_PORT');
+  }
+
+  const openaiApiKey = options?.requireOpenAi ? readRequiredValue(env, 'OPENAI_API_KEY') : readOptionalValue(env, 'OPENAI_API_KEY');
+  const openaiRealtimeModel = options?.requireOpenAi
+    ? readRequiredValue(env, 'OPENAI_REALTIME_MODEL')
+    : readOptionalValue(env, 'OPENAI_REALTIME_MODEL');
+
+  const config: RuntimeConfig = {
+    businessAdapter: businessAdapterRaw,
+    receptionistApiPort,
+  };
+
+  if (openaiApiKey !== undefined) {
+    config.openaiApiKey = openaiApiKey;
+  }
+  if (openaiRealtimeModel !== undefined) {
+    config.openaiRealtimeModel = openaiRealtimeModel;
+  }
+
+  if (businessAdapterRaw === 'salonflow') {
+    config.salonflowBaseUrl = readRequiredValue(env, 'SALONFLOW_BASE_URL');
+    config.salonflowIntegrationToken = readRequiredValue(env, 'SALONFLOW_INTEGRATION_TOKEN');
+    config.salonflowBusinessId = readRequiredValue(env, 'SALONFLOW_BUSINESS_ID');
+  }
+
+  return config;
+};
+
 export const validateEnvironment = (
   input: Record<string, string | undefined>,
   required: string[]
