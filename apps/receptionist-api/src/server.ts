@@ -9,6 +9,7 @@ import { createConversationState } from '@sudo-ai-receptionist/conversation-stat
 import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
 import { buildCorsHeaders, parseAllowedOrigins } from './cors.js';
 import { BusinessIdMismatchError, resolveBusinessId } from './business.js';
+import { resolveRealtimeBusinessContext } from './realtime.js';
 
 const runtime = loadRuntimeConfig(process.env);
 const adapter =
@@ -88,25 +89,6 @@ const writeBusinessIdMismatch = (res: http.ServerResponse, error: BusinessIdMism
     error: 'business_id_mismatch',
     detail: `Requested businessId ${error.requestedBusinessId} does not match configured SalonFlow tenant.`,
   }));
-};
-
-const summarizeBusinessContext = async (businessId: string, correlationId: string): Promise<RealtimeBusinessContext> => {
-  const businessProfile = await adapter.getBusinessProfile({ businessId, correlationId });
-  const services = await adapter.listServices({ businessId, correlationId });
-  const businessContext: RealtimeBusinessContext = {
-    businessName: businessProfile.name,
-    serviceNames: services.map((service) => service.name).filter(Boolean),
-    timeZone: businessProfile.timezone,
-  };
-  const location = businessProfile.website ?? businessProfile.phone;
-  if (location) {
-    businessContext.location = location;
-  }
-  const bookingPolicy = businessProfile.policies.filter(Boolean).join(' ').trim();
-  if (bookingPolicy) {
-    businessContext.bookingPolicy = bookingPolicy;
-  }
-  return businessContext;
 };
 
 const postRealtimeCall = async (input: { offerSdp: string; instructions: string; model: string }): Promise<{ answerSdp: string; callId: string }> => {
@@ -228,7 +210,12 @@ const server = http.createServer(async (req, res) => {
       const state = payload.state !== undefined
         ? validateConversationState(payload.state)
         : createConversationState({ conversationId, businessId, channel: 'voice' });
-      const businessContext = await summarizeBusinessContext(businessId, correlationId);
+      const businessContext = await resolveRealtimeBusinessContext({
+        adapter,
+        businessId,
+        correlationId,
+        logger,
+      });
       const sessionToken = createSessionToken();
       const instructions = buildRealtimeInstructions({
         conversation: state,
