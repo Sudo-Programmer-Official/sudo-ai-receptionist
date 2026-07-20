@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "npm run build -ws",
-    "build:api": "npm run build --workspace=@sudo-ai-receptionist/business-contracts && npm run build --workspace=@sudo-ai-receptionist/conversation-state && npm run build --workspace=@sudo-ai-receptionist/observability && npm run build --workspace=@sudo-ai-receptionist/shared && npm run build --workspace=@sudo-ai-receptionist/agent-core && npm run build --workspace=@sudo-ai-receptionist/realtime-runtime && npm run build --workspace=@sudo-ai-receptionist/mock-business && npm run build --workspace=@sudo-ai-receptionist/salonflow && npm run build --workspace=@sudo-ai-receptionist/receptionist-api",
+    "build:api": "npm run build --workspace=@sudo-ai-receptionist/business-contracts && npm run build --workspace=@sudo-ai-receptionist/conversation-state && npm run build --workspace=@sudo-ai-receptionist/shared && npm run build --workspace=@sudo-ai-receptionist/observability && npm run build --workspace=@sudo-ai-receptionist/agent-core && npm run build --workspace=@sudo-ai-receptionist/realtime-runtime && npm run build --workspace=@sudo-ai-receptionist/mock-business && npm run build --workspace=@sudo-ai-receptionist/salonflow && npm run build --workspace=@sudo-ai-receptionist/receptionist-api",
     "build:web": "npm --workspace @sudo-ai-receptionist/receptionist-web run build",
     "start:api": "npm run start --workspace=@sudo-ai-receptionist/receptionist-api",
     "typecheck": "npm run typecheck -ws --if-present",

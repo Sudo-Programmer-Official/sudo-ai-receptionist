@@ -2,7 +2,8 @@
   "name": "@sudo-ai-receptionist/observability",
   "version": "0.1.0",
   "type": "module",
-  "main": "./dist/observability/src/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json"

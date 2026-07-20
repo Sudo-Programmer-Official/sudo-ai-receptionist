@@ -2,13 +2,14 @@
   "name": "@sudo-ai-receptionist/receptionist-api",
   "version": "0.1.0",
   "type": "module",
-  "main": "./dist/apps/receptionist-api/src/server.js",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
   "engines": {
     "node": "22.12.0"
   },
   "scripts": {
     "build": "npm run build --prefix ../../packages/business-contracts && npm run build --prefix ../../packages/conversation-state && npm run build --prefix ../../packages/observability && npm run build --prefix ../../packages/shared && npm run build --prefix ../../packages/agent-core && npm run build --prefix ../../packages/realtime-runtime && npm run build --prefix ../../integrations/mock-business && npm run build --prefix ../../integrations/salonflow && npm exec -- tsc -p tsconfig.json",
-    "start": "node dist/apps/receptionist-api/src/server.js",
+    "start": "node dist/server.js",
     "dev": "tsx src/server.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
