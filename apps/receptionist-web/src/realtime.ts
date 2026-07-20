@@ -117,6 +117,16 @@ const createSessionUpdatePayload = (session: RealtimeSessionResponse): Record<st
   },
 });
 
+const createChatRequest = (
+  session: RealtimeSessionResponse | null,
+  text: string,
+  state: ConversationStateSnapshot | null,
+): { text: string; businessId?: string; state?: ConversationStateSnapshot } => ({
+  text,
+  ...(session?.businessId ? { businessId: session.businessId } : {}),
+  ...(state ? { state } : {}),
+});
+
 export class RealtimeVoiceController {
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
@@ -689,8 +699,7 @@ export class RealtimeVoiceController {
     const requestId = ++this.activeRequestId;
     try {
       const response = await this.api.sendChat({
-        text: transcript,
-        ...(this.conversationState ? { state: this.conversationState } : {}),
+        ...createChatRequest(this.session, transcript, this.conversationState),
       });
 
       if (requestId !== this.activeRequestId || this.destroyed) {
@@ -737,8 +746,7 @@ export class RealtimeVoiceController {
     const requestStartedAt = performance.now();
     const requestId = ++this.activeRequestId;
     const response = await this.api.sendChat({
-      text: trimmed,
-      ...(this.conversationState ? { state: this.conversationState } : {}),
+      ...createChatRequest(this.session, trimmed, this.conversationState),
     });
 
     if (requestId !== this.activeRequestId || this.destroyed) {

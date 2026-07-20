@@ -107,4 +107,37 @@ describe('createApiClient', () => {
       state: { requestedService: 'Haircut' },
     });
   });
+
+  test('includes businessId in chat requests when provided', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({
+        message: 'ok',
+        requiresUserAction: true,
+      } satisfies ChatResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({
+      baseUrl: 'https://backend.example',
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await client.sendChat({
+      text: 'hello',
+      businessId: '754decf4-4db3-4bfc-be6c-1a9733eea42c',
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://backend.example/api/chat',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          text: 'hello',
+          businessId: '754decf4-4db3-4bfc-be6c-1a9733eea42c',
+        }),
+      }),
+    );
+  });
 });

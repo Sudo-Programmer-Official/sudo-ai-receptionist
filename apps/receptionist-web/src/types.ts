@@ -99,6 +99,7 @@ export type ConversationStateSnapshot = {
 
 export type ChatRequest = {
   text: string;
+  businessId?: string;
   state?: ConversationStateSnapshot;
   interrupted?: boolean;
 };
