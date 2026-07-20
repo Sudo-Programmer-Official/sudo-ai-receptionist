@@ -33,6 +33,7 @@ describe('mountReceptionistApp', () => {
     expect(document.querySelector('#transcript')).not.toBeNull();
     expect(document.querySelector('#sessionSummary')?.textContent).toContain('Health check succeeded');
     expect(document.querySelector('#apiState')?.textContent).toContain('API healthy');
+    expect(document.querySelector('#readinessSummary')).not.toBeNull();
     expect(document.querySelector('#bookingValue')?.textContent).toBe('Unconfirmed');
   });
 });

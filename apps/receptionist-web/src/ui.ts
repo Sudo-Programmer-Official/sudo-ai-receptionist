@@ -31,6 +31,8 @@ type AppDom = {
   toolStatus: HTMLElement;
   toolList: HTMLElement;
   metricsList: HTMLElement;
+  readinessList: HTMLElement;
+  readinessSummary: HTMLElement;
   stagePills: HTMLElement;
   userText: HTMLTextAreaElement;
   connectBtn: HTMLButtonElement;
@@ -127,6 +129,14 @@ const shellMarkup = `
             </div>
             <div class="metric-list" id="metricsSummary"></div>
             <div class="tool-list" id="toolList"></div>
+          </div>
+
+          <div class="card">
+            <div class="row-between">
+              <strong>MVP readiness</strong>
+              <div class="small" id="readinessSummary">0/5 ready</div>
+            </div>
+            <div class="checklist" id="readinessList"></div>
           </div>
 
           <div class="card transcript-card">
@@ -231,6 +241,8 @@ const createDom = (root: HTMLElement): AppDom => {
     toolStatus: get('toolStatus'),
     toolList: get('toolList'),
     metricsList: get('metricsSummary'),
+    readinessList: get('readinessList'),
+    readinessSummary: get('readinessSummary'),
     stagePills: get('stagePills'),
     userText: get<HTMLTextAreaElement>('userText'),
     connectBtn: get<HTMLButtonElement>('connectBtn'),
@@ -249,6 +261,19 @@ const formatMetric = (metric: LatencyMetric): string => {
 
 const summarizeToolStatus = (items: ToolStatus[] | undefined): string =>
   items && items.length > 0 ? items.map((item) => `${item.name} ${item.latencyMs ? `(${item.latencyMs}ms)` : ''}`.trim()).join(' · ') : 'No tool calls yet.';
+
+type ReadinessItem = {
+  label: string;
+  ready: boolean;
+};
+
+const buildReadinessItems = (state: AppState, dom: AppDom): ReadinessItem[] => [
+  { label: 'Backend healthy', ready: dom.apiState.textContent?.toLowerCase().includes('healthy') ?? false },
+  { label: 'Mic permission granted', ready: dom.micState.textContent?.toLowerCase().includes('enabled') ?? false },
+  { label: 'Voice session connected', ready: Boolean(state.session) },
+  { label: 'Transcript captured', ready: dom.transcript.children.length > 0 },
+  { label: 'Booking confirmed', ready: state.conversation?.bookingConfirmationStatus === 'confirmed' },
+];
 
 export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: () => void } => {
   const dom = createDom(root);
@@ -269,7 +294,9 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         setChipState(dom.voiceState, meta.label, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'active' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : 'active');
         dom.voiceHint.textContent = meta.hint;
         setStatusDot(dom.connectionDot, voiceState === 'error' ? 'fail' : voiceState === 'booked' ? 'live' : voiceState === 'connecting' || voiceState === 'thinking' ? 'warn' : state.session ? 'live' : '');
+        updateConnectButton();
         renderStages();
+        renderReadiness();
       },
       onTranscript: (role, text) => {
         const bubble = document.createElement('div');
@@ -277,6 +304,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         bubble.textContent = text;
         dom.transcript.appendChild(bubble);
         dom.transcript.scrollTop = dom.transcript.scrollHeight;
+        renderReadiness();
       },
       onSessionSummary: (summary) => {
         dom.sessionSummary.textContent = summary;
@@ -301,6 +329,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           setChipState(dom.voiceState, 'Confirming', 'warn');
           dom.voiceHint.textContent = 'Explicit yes is required before booking.';
         }
+        updateConnectButton();
+        renderReadiness();
         renderStages();
       },
       onToolStatus: (toolStatus) => {
@@ -314,6 +344,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           dom.toolList.appendChild(row);
         }
         setStatusDot(dom.toolDot, toolStatus.some((tool) => tool.status === 'ok') ? 'live' : toolStatus.some((tool) => tool.status === 'error') ? 'fail' : '');
+        renderReadiness();
       },
       onMetric: (metric) => {
         state.metrics = [metric, ...state.metrics].slice(0, 8);
@@ -324,6 +355,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           row.textContent = formatMetric(item);
           dom.metricsList.appendChild(row);
         }
+        renderReadiness();
       },
       onError: (message) => {
         setChipState(dom.apiState, 'Error', 'fail');
@@ -332,6 +364,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         setChipState(dom.voiceState, 'Error', 'fail');
         dom.voiceHint.textContent = 'The realtime session or backend call failed.';
         setStatusDot(dom.connectionDot, 'fail');
+        updateConnectButton();
+        renderReadiness();
         renderStages();
       },
     },
@@ -349,6 +383,26 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     }
   };
 
+  const renderReadiness = (): void => {
+    const items = buildReadinessItems(state, dom);
+    const readyCount = items.filter((item) => item.ready).length;
+    dom.readinessSummary.textContent = `${readyCount}/${items.length} ready`;
+    dom.readinessList.innerHTML = '';
+    for (const item of items) {
+      const row = document.createElement('div');
+      row.className = `check-row ${item.ready ? 'ready' : 'pending'}`;
+      row.textContent = item.label;
+      dom.readinessList.appendChild(row);
+    }
+  };
+
+  const updateConnectButton = (): void => {
+    const hasSession = Boolean(state.session);
+    dom.connectBtn.textContent = hasSession ? 'Stop voice' : 'Start voice';
+    dom.connectBtn.classList.toggle('danger', hasSession);
+    dom.connectBtn.classList.toggle('primary', !hasSession);
+  };
+
   const refreshHealth = async (): Promise<void> => {
     setChipState(dom.apiState, 'Checking API', 'warn');
     try {
@@ -359,18 +413,25 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         dom.sessionSummary.textContent = `Health check succeeded via /health${health.status ? ` (${health.status})` : ''}.`;
       }
       setStatusDot(dom.connectionDot, state.session ? 'live' : '');
+      renderReadiness();
     } catch {
       setChipState(dom.apiState, 'API offline', 'fail');
       if (!state.session) {
         dom.sessionSummary.textContent = 'Unable to reach the backend health endpoint.';
       }
       setStatusDot(dom.connectionDot, 'fail');
+      renderReadiness();
     }
   };
 
   const connect = async (): Promise<void> => {
+    if (state.session) {
+      await disconnect();
+      return;
+    }
     setChipState(dom.voiceState, 'Connecting', 'warn');
     state.voiceState = 'connecting';
+    updateConnectButton();
     renderStages();
     try {
       const session = await controller.connect(state.conversation ?? undefined);
@@ -378,14 +439,31 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       setChipState(dom.connectionState, 'Connected', 'active');
       setStatusDot(dom.connectionDot, 'live');
       dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
+      updateConnectButton();
+      renderReadiness();
       renderStages();
     } catch (error) {
       setChipState(dom.connectionState, 'Connection failed', 'fail');
       setStatusDot(dom.connectionDot, 'fail');
       dom.sessionSummary.textContent = error instanceof Error ? error.message : 'Failed to create voice session.';
       state.voiceState = 'error';
+      updateConnectButton();
+      renderReadiness();
       renderStages();
     }
+  };
+
+  const disconnect = async (): Promise<void> => {
+    await controller.disconnect();
+    state.session = null;
+    setChipState(dom.connectionState, 'Disconnected');
+    setChipState(dom.voiceState, 'Idle');
+    state.voiceState = 'idle';
+    dom.voiceHint.textContent = 'Waiting for connection.';
+    setStatusDot(dom.connectionDot, '');
+    updateConnectButton();
+    renderReadiness();
+    renderStages();
   };
 
   const enableMic = async (): Promise<void> => {
@@ -393,9 +471,11 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       await navigator.mediaDevices.getUserMedia({ audio: true });
       setChipState(dom.micState, 'Mic enabled', 'active');
       dom.sessionSummary.textContent = 'Microphone permission granted.';
+      renderReadiness();
     } catch {
       setChipState(dom.micState, 'Mic blocked', 'warn');
       dom.sessionSummary.textContent = 'Microphone permission was denied.';
+      renderReadiness();
     }
   };
 
@@ -403,10 +483,12 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     void controller.interrupt();
     setChipState(dom.voiceState, 'Interrupted', 'warn');
     dom.voiceHint.textContent = 'The assistant audio was stopped immediately.';
+    renderReadiness();
   };
 
   const clearTranscript = (): void => {
     dom.transcript.innerHTML = '';
+    renderReadiness();
   };
 
   const sendText = async (): Promise<void> => {
@@ -419,6 +501,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     } finally {
       dom.userText.value = '';
       renderStages();
+      renderReadiness();
     }
   };
 
@@ -427,6 +510,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     setChipState(dom.micState, 'Mic off');
     setChipState(dom.voiceState, 'Idle');
     dom.voiceHint.textContent = 'Waiting for connection.';
+    updateConnectButton();
+    renderReadiness();
     renderStages();
     void refreshHealth();
   };

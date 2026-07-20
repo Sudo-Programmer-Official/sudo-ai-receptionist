@@ -357,6 +357,12 @@ p {
   margin-top: 12px;
 }
 
+.checklist {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .metric-row,
 .tool-row {
   padding: 10px 12px;
@@ -366,6 +372,24 @@ p {
   color: var(--text);
   font-size: 0.92rem;
   line-height: 1.4;
+}
+
+.check-row {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.check-row.ready {
+  color: #062113;
+  background: rgba(131, 247, 194, 0.9);
+}
+
+.check-row.pending {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 textarea {

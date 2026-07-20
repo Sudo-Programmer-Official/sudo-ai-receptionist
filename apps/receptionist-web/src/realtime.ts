@@ -211,6 +211,28 @@ export class RealtimeVoiceController {
     return this.handleUserText(text);
   }
 
+  async disconnect(): Promise<void> {
+    this.activeRequestId += 1;
+    this.pendingAudioStartAt = null;
+    this.assistantSpeaking = false;
+    this.sendEvent({ type: 'response.cancel' });
+    this.sendEvent({ type: 'output_audio_buffer.clear' });
+    this.dataChannel?.close();
+    this.pc?.getSenders().forEach((sender) => sender.track?.stop());
+    this.pc?.close();
+    this.localStream?.getTracks().forEach((track) => track.stop());
+    this.audioElement.pause();
+    this.audioElement.currentTime = 0;
+    this.audioElement.srcObject = null;
+    this.pc = null;
+    this.dataChannel = null;
+    this.localStream = null;
+    this.remoteStream = null;
+    this.session = null;
+    this.events.onStateChange('idle');
+    this.events.onSessionSummary('Voice session disconnected.');
+  }
+
   async interrupt(): Promise<void> {
     this.pendingAudioStartAt = null;
     this.assistantSpeaking = false;
@@ -223,16 +245,7 @@ export class RealtimeVoiceController {
 
   async dispose(): Promise<void> {
     this.destroyed = true;
-    this.dataChannel?.close();
-    this.pc?.getSenders().forEach((sender) => sender.track?.stop());
-    this.pc?.close();
-    this.localStream?.getTracks().forEach((track) => track.stop());
-    this.audioElement.pause();
-    this.audioElement.srcObject = null;
-    this.pc = null;
-    this.dataChannel = null;
-    this.localStream = null;
-    this.remoteStream = null;
+    await this.disconnect();
   }
 
   private async ensureMedia(): Promise<void> {
