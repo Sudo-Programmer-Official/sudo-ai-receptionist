@@ -1,4 +1,4 @@
-const DEFAULT_PRODUCTION_ORIGINS = ['https://sudo-ai-receptionist-receptionist-w.vercel.app'];
+const DEFAULT_PRODUCTION_ORIGINS = ['https://sudo-ai-receptionist-receptionist-gsjjfepmk.vercel.app'];
 
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 

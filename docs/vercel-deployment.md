@@ -9,12 +9,14 @@ Recommended Vercel project:
 - Build Command: `npm run build`
 - Output Directory: `dist`
 - Environment variable: `VITE_RECEPTIONIST_API_URL=https://sudo-ai-receptionist-api.onrender.com`
+- API CORS must include the deployed Vercel origin, currently `https://sudo-ai-receptionist-receptionist-gsjjfepmk.vercel.app`
 
 ## Notes
 
 - The frontend is now a static browser app built by Vite.
 - The browser talks to the backend only through `VITE_RECEPTIONIST_API_URL`.
 - The API enforces strict CORS using `ALLOWED_ORIGINS` plus localhost development origins.
+- If the frontend is redeployed to a new Vercel subdomain, update `ALLOWED_ORIGINS` on Render to match that origin.
 - The Vercel rewrites are for deployment convenience and SPA fallback only.
 
 ## Root-directory fallback

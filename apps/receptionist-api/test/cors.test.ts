@@ -2,6 +2,12 @@ import { describe, expect, test } from 'vitest';
 import { buildCorsHeaders, isAllowedOrigin, parseAllowedOrigins } from '../src/cors';
 
 describe('cors policy', () => {
+  test('includes the deployed Vercel frontend origin by default', () => {
+    const allowedOrigins = parseAllowedOrigins(undefined);
+
+    expect(isAllowedOrigin('https://sudo-ai-receptionist-receptionist-gsjjfepmk.vercel.app', allowedOrigins)).toBe(true);
+  });
+
   test('allows configured Vercel and localhost origins', () => {
     const allowedOrigins = parseAllowedOrigins('https://app.example.com');
     const cors = buildCorsHeaders('https://app.example.com', allowedOrigins);
