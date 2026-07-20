@@ -65,6 +65,13 @@ const isRateLimited = (key: string): boolean => {
   return current.count > limit;
 };
 
+const setCorsHeaders = (res: http.ServerResponse): void => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Correlation-Id, Accept');
+  res.setHeader('Access-Control-Max-Age', '86400');
+};
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const correlationId = req.headers['x-correlation-id']?.toString() ?? createCorrelationId();
@@ -73,6 +80,12 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('x-correlation-id', correlationId);
   res.setHeader('x-content-type-options', 'nosniff');
+  setCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204).end();
+    return;
+  }
 
   if (isRateLimited(clientKey)) {
     res.writeHead(429).end(JSON.stringify({ error: 'rate_limited' }));
