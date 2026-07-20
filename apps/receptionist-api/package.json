@@ -4,7 +4,7 @@
   "type": "module",
   "main": "./dist/apps/receptionist-api/src/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm install --include=dev && npm exec -- tsc -p tsconfig.json",
     "start": "node dist/apps/receptionist-api/src/server.js",
     "dev": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
