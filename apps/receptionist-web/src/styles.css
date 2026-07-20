@@ -313,6 +313,12 @@ p {
   color: var(--muted);
 }
 
+.build-marker {
+  margin-top: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .transcript-card {
   min-height: 380px;
 }

@@ -19,6 +19,7 @@ type MountOptions = {
 type AppDom = {
   transcript: HTMLElement;
   sessionSummary: HTMLElement;
+  buildMarker: HTMLElement;
   voiceState: HTMLElement;
   voiceHint: HTMLElement;
   connectionState: HTMLElement;
@@ -96,6 +97,7 @@ const shellMarkup = `
         <div class="voice-orb" id="connectionDot">
           <div class="voice-orb-inner"></div>
         </div>
+        <div class="small build-marker" id="buildMarker">Build: unknown</div>
       </div>
     </header>
 
@@ -241,6 +243,7 @@ const createDom = (root: HTMLElement): AppDom => {
   return {
     transcript: get('transcript'),
     sessionSummary: get('sessionSummary'),
+    buildMarker: get('buildMarker'),
     voiceState: get('voiceState'),
     voiceHint: get('voiceHint'),
     connectionState: get('connectionState'),
@@ -361,6 +364,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       lastErrorMessage: 'none',
     },
   };
+  const buildSha = import.meta.env.VITE_VERCEL_GIT_COMMIT_SHA?.trim() || 'unknown';
+  dom.buildMarker.textContent = `Build: ${buildSha.slice(0, 7)}`;
 
   const controller = new RealtimeVoiceController(
     api,
