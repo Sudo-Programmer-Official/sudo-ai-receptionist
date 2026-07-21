@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildCorsHeaders, isAllowedOrigin, parseAllowedOrigins } from '../src/cors';
+import { buildCorsHeaders, buildPublicCorsHeaders, isAllowedOrigin, parseAllowedOrigins } from '../src/cors';
 
 describe('cors policy', () => {
   test('includes the deployed Vercel frontend origin by default', () => {
@@ -37,5 +37,13 @@ describe('cors policy', () => {
     expect(cors.allowed).toBe(false);
     expect(cors.headers['Access-Control-Allow-Origin']).toBeUndefined();
     expect(cors.headers.Vary).toBe('Origin');
+  });
+
+  test('exposes public cors headers for health checks', () => {
+    const headers = buildPublicCorsHeaders();
+
+    expect(headers['Access-Control-Allow-Origin']).toBe('*');
+    expect(headers['Access-Control-Allow-Methods']).toContain('GET');
+    expect(headers['Access-Control-Allow-Headers']).toContain('Accept');
   });
 });

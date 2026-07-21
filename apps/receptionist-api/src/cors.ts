@@ -72,3 +72,11 @@ export const buildCorsHeaders = (origin: string | undefined, allowedOrigins: str
     headers,
   };
 };
+
+export const buildPublicCorsHeaders = (): Record<string, string> => ({
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Correlation-Id, Accept',
+  'Access-Control-Max-Age': '86400',
+  Vary: 'Origin',
+});

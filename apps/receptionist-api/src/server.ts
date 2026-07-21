@@ -7,7 +7,7 @@ import { validateConversationState } from '@sudo-ai-receptionist/conversation-st
 import { buildRealtimeInstructions, createSessionPayload, type RealtimeBusinessContext } from '@sudo-ai-receptionist/realtime-runtime';
 import { createConversationState } from '@sudo-ai-receptionist/conversation-state';
 import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
-import { buildCorsHeaders, parseAllowedOrigins } from './cors.js';
+import { buildCorsHeaders, buildPublicCorsHeaders, parseAllowedOrigins } from './cors.js';
 import { BusinessIdMismatchError, ServerMisconfiguredError, resolveBusinessId, resolveChatText } from './business.js';
 import { resolveRealtimeBusinessContext } from './realtime.js';
 
@@ -158,6 +158,13 @@ const server = http.createServer(async (req, res) => {
   const corsAllowed = setCorsHeaders(res, requestOrigin);
 
   if (req.method === 'OPTIONS') {
+    if (url.pathname === '/health' || url.pathname === '/healthz') {
+      for (const [key, value] of Object.entries(buildPublicCorsHeaders())) {
+        res.setHeader(key, value);
+      }
+      res.writeHead(204).end();
+      return;
+    }
     if (!corsAllowed && requestOrigin) {
       res.writeHead(403).end(JSON.stringify({ error: 'cors_denied' }));
       return;
@@ -172,6 +179,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/health' || url.pathname === '/healthz') {
+    for (const [key, value] of Object.entries(buildPublicCorsHeaders())) {
+      res.setHeader(key, value);
+    }
     res.writeHead(200).end(JSON.stringify({ ok: true }));
     return;
   }
