@@ -14,10 +14,40 @@ export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
 export const createCorrelationId = (): string =>
   `corr_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 
-export const redactPhoneNumber = (value: string): string => value.replace(/\b(\+?\d[\d\s().-]{6,}\d)\b/g, '[redacted-phone]');
+const ISO_DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/g;
+const DISPLAY_DATE_PATTERN = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*)?\d{4}\b/gi;
 
-export const redactPersonData = (value: string): string =>
-  redactPhoneNumber(value).replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]');
+const shieldDates = (value: string): { text: string; tokens: Array<{ token: string; value: string }> } => {
+  const tokens: Array<{ token: string; value: string }> = [];
+  let nextToken = 0;
+
+  const replaceMatches = (text: string, pattern: RegExp): string =>
+    text.replace(pattern, (match) => {
+      const token = `__DATE_TOKEN_${nextToken++}__`;
+      tokens.push({ token, value: match });
+      return token;
+    });
+
+  let text = value;
+  text = replaceMatches(text, ISO_DATE_PATTERN);
+  text = replaceMatches(text, DISPLAY_DATE_PATTERN);
+  return { text, tokens };
+};
+
+const restoreDates = (value: string, tokens: Array<{ token: string; value: string }>): string =>
+  tokens.reduce((text, token) => text.replaceAll(token.token, token.value), value);
+
+export const redactPhoneNumber = (value: string): string => {
+  const { text, tokens } = shieldDates(value);
+  const redacted = text.replace(/\b(\+?\d[\d\s().-]{6,}\d)\b/g, '[redacted-phone]');
+  return restoreDates(redacted, tokens);
+};
+
+export const redactPersonData = (value: string): string => {
+  const { text, tokens } = shieldDates(value);
+  const redacted = redactPhoneNumber(text).replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]');
+  return restoreDates(redacted, tokens);
+};
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> => {
   const controller = new AbortController();

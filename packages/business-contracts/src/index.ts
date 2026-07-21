@@ -51,6 +51,22 @@ export interface AvailabilityResult {
   slots: AvailabilitySlot[];
   source: 'mock' | 'salonflow';
   expiresAt: string;
+  diagnostics?: AvailabilityDiagnostics | undefined;
+}
+
+export interface AvailabilityDiagnostics {
+  businessTimezone?: string | undefined;
+  preferredDate?: string | undefined;
+  preferredTimeRange?: string | undefined;
+  serviceId?: string | undefined;
+  serviceDurationMinutes?: number | undefined;
+  activeStaffConsidered?: number | undefined;
+  staffAssignedToService?: number | undefined;
+  businessHoursFound?: number | undefined;
+  staffWorkingWindowsFound?: number | undefined;
+  blockedIntervalsFound?: number | undefined;
+  candidateSlotsGenerated?: number | undefined;
+  finalSlotsReturned?: number | undefined;
 }
 
 export interface CustomerRecord {

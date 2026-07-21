@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { loadRuntimeConfig } from '../src/index';
+import { loadRuntimeConfig, redactPersonData } from '../src/index';
 
 describe('loadRuntimeConfig', () => {
   test('rejects mock fallback in production', () => {
@@ -21,5 +21,12 @@ describe('loadRuntimeConfig', () => {
 
     expect(config.businessAdapter).toBe('salonflow');
     expect(config.salonflowBusinessId).toBe('754decf4-4db3-4bfc-be6c-1a9733eea42c');
+  });
+
+  test('preserves ISO and display dates while redacting phone numbers', () => {
+    expect(redactPersonData('2026-07-21')).toBe('2026-07-21');
+    expect(redactPersonData('July 21, 2026')).toBe('July 21, 2026');
+    expect(redactPersonData('5551234567')).toBe('[redacted-phone]');
+    expect(redactPersonData('+1 555 123 4567')).toBe('[redacted-phone]');
   });
 });

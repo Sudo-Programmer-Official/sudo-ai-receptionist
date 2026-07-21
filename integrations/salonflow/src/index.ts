@@ -1,5 +1,6 @@
 import type {
   AvailabilityRequest,
+  AvailabilityDiagnostics,
   AvailabilityResult,
   BookingRecord,
   BusinessAdapter,
@@ -153,7 +154,10 @@ const parseAvailability = (value: unknown): AvailabilityResult => {
   ensure(isString(obj.source), 'Invalid availability payload: source');
   ensure(isString(obj.expiresAt), 'Invalid availability payload: expiresAt');
 
-  return {
+  const diagnosticsSource = isRecord(obj.diagnostics) ? obj.diagnostics : obj;
+  const diagnostics = parseAvailabilityDiagnostics(diagnosticsSource, (slots as unknown[]).length);
+
+  const result: AvailabilityResult = {
     slots: (slots as unknown[]).map((slot: unknown) => {
       ensure(isRecord(slot), 'Invalid availability slot payload');
       const slotRecord = slot as JsonObject;
@@ -171,6 +175,42 @@ const parseAvailability = (value: unknown): AvailabilityResult => {
     source: 'salonflow',
     expiresAt: obj.expiresAt as string,
   };
+
+  if (diagnostics) {
+    result.diagnostics = diagnostics;
+  }
+
+  return result;
+};
+
+const parseAvailabilityDiagnostics = (value: JsonObject, finalSlotsReturned: number): AvailabilityDiagnostics | undefined => {
+  const diagnostics: AvailabilityDiagnostics = {};
+  const businessTimezone = optionalString(value.businessTimezone ?? value.timeZone ?? value.timezone);
+  const preferredDate = optionalString(value.preferredDate);
+  const preferredTimeRange = optionalString(value.preferredTimeRange);
+  const serviceId = optionalString(value.serviceId);
+  const serviceDurationMinutes = isNumber(value.serviceDurationMinutes) ? value.serviceDurationMinutes : isNumber(value.durationMinutes) ? value.durationMinutes : undefined;
+  const activeStaffConsidered = isNumber(value.activeStaffConsidered) ? value.activeStaffConsidered : isNumber(value.activeStaffCount) ? value.activeStaffCount : undefined;
+  const staffAssignedToService = isNumber(value.staffAssignedToService) ? value.staffAssignedToService : isNumber(value.serviceStaffCount) ? value.serviceStaffCount : undefined;
+  const businessHoursFound = isNumber(value.businessHoursFound) ? value.businessHoursFound : isNumber(value.businessHoursCount) ? value.businessHoursCount : undefined;
+  const staffWorkingWindowsFound = isNumber(value.staffWorkingWindowsFound) ? value.staffWorkingWindowsFound : undefined;
+  const blockedIntervalsFound = isNumber(value.blockedIntervalsFound) ? value.blockedIntervalsFound : undefined;
+  const candidateSlotsGenerated = isNumber(value.candidateSlotsGenerated) ? value.candidateSlotsGenerated : isNumber(value.candidateSlotsBeforeFiltering) ? value.candidateSlotsBeforeFiltering : undefined;
+
+  if (businessTimezone) diagnostics.businessTimezone = businessTimezone;
+  if (preferredDate) diagnostics.preferredDate = preferredDate;
+  if (preferredTimeRange) diagnostics.preferredTimeRange = preferredTimeRange;
+  if (serviceId) diagnostics.serviceId = serviceId;
+  if (serviceDurationMinutes !== undefined) diagnostics.serviceDurationMinutes = serviceDurationMinutes;
+  if (activeStaffConsidered !== undefined) diagnostics.activeStaffConsidered = activeStaffConsidered;
+  if (staffAssignedToService !== undefined) diagnostics.staffAssignedToService = staffAssignedToService;
+  if (businessHoursFound !== undefined) diagnostics.businessHoursFound = businessHoursFound;
+  if (staffWorkingWindowsFound !== undefined) diagnostics.staffWorkingWindowsFound = staffWorkingWindowsFound;
+  if (blockedIntervalsFound !== undefined) diagnostics.blockedIntervalsFound = blockedIntervalsFound;
+  if (candidateSlotsGenerated !== undefined) diagnostics.candidateSlotsGenerated = candidateSlotsGenerated;
+  if (finalSlotsReturned >= 0) diagnostics.finalSlotsReturned = finalSlotsReturned;
+
+  return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
 };
 
 const parseCustomer = (value: unknown): CustomerRecord => {

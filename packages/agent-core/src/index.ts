@@ -241,6 +241,73 @@ const parseAvailabilityIntent = (text: string, timeZone: string): ParsedAvailabi
   };
 };
 
+const formatDisplayDateShort = (isoDate: string): string => {
+  const match = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return isoDate;
+  }
+  const year = Number.parseInt(match[1] ?? '', 10);
+  const month = Number.parseInt(match[2] ?? '', 10);
+  const day = Number.parseInt(match[3] ?? '', 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return isoDate;
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+};
+
+const logEmptyAvailabilityDiagnostics = async (input: {
+  adapter: BusinessAdapter;
+  businessId: string;
+  businessTimezone: string;
+  preferredDate: string;
+  preferredTimeRange?: string;
+  serviceId: string;
+  serviceDurationMinutes: number | null;
+  businessHoursFound: number;
+  correlationId: string;
+  diagnostics?: Partial<{
+    staffWorkingWindowsFound: number | undefined;
+    blockedIntervalsFound: number | undefined;
+    candidateSlotsGenerated: number | undefined;
+    finalSlotsReturned: number | undefined;
+  }>;
+}): Promise<void> => {
+  let activeStaffConsidered: number | undefined;
+  let staffAssignedToService: number | undefined;
+  try {
+    const staff = await input.adapter.listStaff({
+      businessId: input.businessId,
+      correlationId: input.correlationId,
+    });
+    activeStaffConsidered = staff.length;
+    staffAssignedToService = staff.filter((member) => member.services.includes(input.serviceId)).length;
+  } catch {
+    activeStaffConsidered = undefined;
+    staffAssignedToService = undefined;
+  }
+
+  console.info(JSON.stringify({
+    scope: 'receptionist-agent',
+    event: 'empty_availability_diagnostics',
+    businessTimezone: input.businessTimezone,
+    preferredDate: input.preferredDate,
+    preferredTimeRange: input.preferredTimeRange ?? 'none',
+    serviceId: input.serviceId,
+    serviceDurationMinutes: input.serviceDurationMinutes ?? 0,
+    activeStaffConsidered: activeStaffConsidered ?? 0,
+    staffAssignedToService: staffAssignedToService ?? 0,
+    businessHoursFound: input.businessHoursFound,
+    staffWorkingWindowsFound: input.diagnostics?.staffWorkingWindowsFound ?? 0,
+    blockedIntervalsFound: input.diagnostics?.blockedIntervalsFound ?? 0,
+    candidateSlotsGeneratedBeforeFiltering: input.diagnostics?.candidateSlotsGenerated ?? 0,
+    finalSlotsReturned: input.diagnostics?.finalSlotsReturned ?? 0,
+  }));
+};
+
 const findService = (services: ServiceOffering[], text: string): ServiceOffering | undefined => {
   const normalized = normalize(text);
   return services.find((service) => normalized.includes(normalize(service.name)) || normalized.includes(normalize(service.serviceId)));
@@ -371,8 +438,28 @@ export class ReceptionistAgent {
       );
       nextState = applyAssistantUpdate(nextState, { proposedSlots: availability.slots });
       if (availability.slots.length === 0) {
+        const requestedService = services.find((service) => service.serviceId === serviceId);
+        const diagnostics = availability.diagnostics;
+        const emptyAvailabilityInput = {
+          adapter: this.adapter,
+          businessId: input.businessId,
+          businessTimezone: nextState.businessProfile?.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK,
+          preferredDate: nextState.preferredDate ?? '',
+          serviceId,
+          serviceDurationMinutes: requestedService?.durationMinutes ?? null,
+          businessHoursFound: nextState.businessProfile?.hours?.length ?? 0,
+          correlationId,
+          diagnostics: {
+            staffWorkingWindowsFound: diagnostics?.staffWorkingWindowsFound,
+            blockedIntervalsFound: diagnostics?.blockedIntervalsFound,
+            candidateSlotsGenerated: diagnostics?.candidateSlotsGenerated,
+            finalSlotsReturned: diagnostics?.finalSlotsReturned,
+          },
+          ...(nextState.preferredTimeRange ? { preferredTimeRange: nextState.preferredTimeRange } : {}),
+        };
+        void logEmptyAvailabilityDiagnostics(emptyAvailabilityInput);
         return {
-          message: `I could not find open times for ${nextState.requestedService ?? 'that service'} on ${nextState.preferredDate}. Would you like a different time or should I offer human follow-up?`,
+          message: `I couldn’t find an opening for ${nextState.requestedService ?? 'that service'} on ${formatDisplayDateShort(nextState.preferredDate ?? '')}. Would you like me to check the afternoon or another day?`,
           state: nextState,
           toolStatus,
           requiresUserAction: true
