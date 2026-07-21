@@ -423,16 +423,6 @@ const maskPhoneForCard = (value?: string): string => {
   return `(***) ***-${digits.slice(-4)}`;
 };
 
-const getInitials = (value?: string): string => {
-  const text = value?.trim() ?? '';
-  if (!text) {
-    return 'C';
-  }
-  const parts = text.split(/\s+/).filter(Boolean);
-  const initials = parts.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('');
-  return initials || text[0]!.toUpperCase();
-};
-
 const titleCase = (value: string): string =>
   value
     .replace(/_/g, ' ')
@@ -650,14 +640,16 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       conversation?.bookingConfirmationStatus,
     );
     const customerName = conversation?.customerName?.trim();
-    const initials = getInitials(customerName);
     const hasCustomer = Boolean(customerName || conversation?.customerPhone?.trim());
 
     dom.callerTitle.textContent = hasCustomer ? 'Customer' : 'Caller';
     dom.nameValue.textContent = customerName || 'Details being collected';
     dom.phoneValue.textContent = conversation?.customerPhone ? maskPhoneForCard(conversation.customerPhone) : 'Details being collected';
     dom.customerBadge.textContent = hasCustomer ? 'Existing customer' : 'New customer';
-    dom.callerAvatar.textContent = initials || 'C';
+    dom.callerAvatar.textContent = '';
+    dom.callerAvatar.style.backgroundImage = 'url(/caller-avatar.png)';
+    dom.callerAvatar.style.backgroundSize = 'cover';
+    dom.callerAvatar.style.backgroundPosition = '18% center';
 
     dom.serviceValue.textContent = serviceSummary.name;
     dom.serviceMeta.textContent = serviceSummary.meta;

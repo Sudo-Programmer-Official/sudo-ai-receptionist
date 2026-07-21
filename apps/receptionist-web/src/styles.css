@@ -794,6 +794,7 @@ textarea::placeholder {
   background:
     radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.24), transparent 26%),
     linear-gradient(145deg, #5f88ff 0%, #8d7dff 52%, #ce74d9 100%);
+  background-repeat: no-repeat;
   color: #fff;
   font-size: 1.4rem;
   font-weight: 800;
