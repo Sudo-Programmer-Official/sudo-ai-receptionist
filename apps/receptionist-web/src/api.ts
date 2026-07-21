@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, ConversationStateSnapshot, HealthResponse, RealtimeCallResponse, RealtimeSessionResponse } from './types';
+import type { ChatRequest, ChatResponse, ConversationStateSnapshot, HealthResponse, RealtimeSessionResponse } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -16,7 +16,7 @@ export type ApiClient = {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   getHealth: () => Promise<HealthResponse>;
   createRealtimeSession: (input?: { businessId?: string; state?: ConversationStateSnapshot }) => Promise<RealtimeSessionResponse>;
-  connectRealtimeCall: (input: { token: string; sdp: string }) => Promise<RealtimeCallResponse>;
+  connectRealtimeCall: (input: { token: string; sdp: string }) => Promise<string>;
   sendChat: (input: ChatRequest) => Promise<ChatResponse>;
 };
 
@@ -89,12 +89,18 @@ export const createApiClient = (config: ApiClientConfig): ApiClient => {
       }),
     });
 
-  const connectRealtimeCall = async (input: { token: string; sdp: string }): Promise<RealtimeCallResponse> =>
-    requestJson<RealtimeCallResponse>('/api/realtime/webrtc', {
+  const connectRealtimeCall = async (input: { token: string; sdp: string }): Promise<string> => {
+    const response = await apiFetch('/api/realtime/webrtc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      headers: {
+        'Content-Type': 'application/sdp',
+        Accept: 'application/sdp, text/plain, */*',
+        'X-Realtime-Session-Token': input.token,
+      },
+      body: input.sdp,
     });
+    return response.text();
+  };
 
   const sendChat = async (input: ChatRequest): Promise<ChatResponse> =>
     requestJson<ChatResponse>('/api/chat', {

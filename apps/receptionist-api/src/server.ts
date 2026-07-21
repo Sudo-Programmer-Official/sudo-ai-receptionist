@@ -9,6 +9,7 @@ import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
 import { buildCorsHeaders, buildPublicCorsHeaders, parseAllowedOrigins } from './cors.js';
 import { BusinessIdMismatchError, ServerMisconfiguredError, resolveBusinessId, resolveChatText } from './business.js';
 import { resolveRealtimeBusinessContext } from './realtime.js';
+import { parseRealtimeOfferSdp, postRealtimeCall, readRequestText, RealtimeCallUpstreamError } from './realtime-webrtc.js';
 
 const runtime = loadRuntimeConfig(process.env);
 const adapter =
@@ -43,8 +44,7 @@ if (!Number.isFinite(env.PORT) || env.PORT <= 0) {
 }
 
 const readJson = async (req: http.IncomingMessage): Promise<unknown> => {
-  let body = '';
-  for await (const chunk of req) body += chunk;
+  const body = await readRequestText(req);
   try {
     return JSON.parse(body || '{}');
   } catch {
@@ -96,54 +96,6 @@ const writeServerMisconfigured = (res: http.ServerResponse, error: ServerMisconf
     error: error.code,
     detail: 'SALONFLOW_BUSINESS_ID is required.',
   }));
-};
-
-const postRealtimeCall = async (input: { offerSdp: string; instructions: string; model: string }): Promise<{ answerSdp: string; callId: string }> => {
-  const openAiApiKey = runtime.openaiApiKey ?? process.env.OPENAI_API_KEY;
-  if (!openAiApiKey) {
-    throw new Error('OPENAI_API_KEY is required for realtime sessions');
-  }
-
-  const sessionConfig = {
-    type: 'realtime',
-    model: input.model,
-    instructions: input.instructions,
-    output_modalities: ['audio'],
-    max_output_tokens: 256,
-    turn_detection: {
-      type: 'server_vad',
-      prefix_padding_ms: 300,
-      silence_duration_ms: 350,
-      threshold: 0.5,
-      create_response: false,
-      interrupt_response: true
-    },
-    input_audio_transcription: {
-      model: 'gpt-4o-mini-transcribe',
-      language: 'en'
-    }
-  };
-
-  const formData = new FormData();
-  formData.append('sdp', new Blob([input.offerSdp], { type: 'application/sdp' }), 'offer.sdp');
-  formData.append('session', new Blob([JSON.stringify(sessionConfig)], { type: 'application/json' }), 'session.json');
-
-  const response = await fetch('https://api.openai.com/v1/realtime/calls', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${openAiApiKey}`
-    },
-    body: formData
-  });
-
-  if (!response.ok) {
-    throw new Error(`OpenAI realtime call failed with status ${response.status}: ${await response.text()}`);
-  }
-
-  const answerSdp = await response.text();
-  const location = response.headers.get('Location') ?? response.headers.get('location') ?? '';
-  const callId = location.split('/').filter(Boolean).pop() ?? createCorrelationId();
-  return { answerSdp, callId };
 };
 
 const server = http.createServer(async (req, res) => {
@@ -300,16 +252,31 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/realtime/webrtc' && req.method === 'POST') {
     try {
       pruneRealtimeSessions();
-      const payload = await readJson(req) as { token?: string; sdp?: string };
-      const token = payload.token?.trim();
-      const offerSdp = payload.sdp?.trim();
-      if (!token || !offerSdp) {
+      const contentType = req.headers['content-type']?.toString().toLowerCase() ?? '';
+      const correlationHeader = req.headers['x-correlation-id']?.toString() ?? correlationId;
+      const sessionToken = req.headers['x-realtime-session-token']?.toString().trim() ?? '';
+      const rawBody = await readRequestText(req);
+      const parsedOffer = parseRealtimeOfferSdp(rawBody);
+      logger.log('info', 'realtime webrtc request received', {
+        correlationId: correlationHeader,
+        contentType,
+        bodyLength: rawBody.length,
+        startsWithV: rawBody.trim().startsWith('v='),
+      });
+      if (!sessionToken) {
         res.writeHead(400).end(JSON.stringify({ error: 'missing_token_or_sdp' }));
         return;
       }
-      const session = realtimeSessions.get(token);
+      if (!parsedOffer.ok) {
+        res.writeHead(400).end(JSON.stringify({
+          error: parsedOffer.error,
+          detail: parsedOffer.detail,
+        }));
+        return;
+      }
+      const session = realtimeSessions.get(sessionToken);
       if (!session || session.expiresAt <= Date.now()) {
-        realtimeSessions.delete(token);
+        realtimeSessions.delete(sessionToken);
         res.writeHead(401).end(JSON.stringify({ error: 'invalid_or_expired_session' }));
         return;
       }
@@ -318,16 +285,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const model = runtime.openaiRealtimeModel ?? 'gpt-realtime-2.1';
-      const instructions = buildRealtimeInstructions({
-        conversation: session.state,
-        businessContext: session.businessContext,
-        model
-      });
       const startedAt = Date.now();
       const { answerSdp, callId } = await postRealtimeCall({
-        offerSdp,
-        instructions,
-        model
+        offerSdp: parsedOffer.sdp,
+        model,
+        voice: 'alloy',
+        openAiApiKey: runtime.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '',
+        safetyIdentifier: 'sudo-ai-receptionist',
       });
       logger.log('info', 'realtime call established', {
         businessId: session.businessId,
@@ -336,15 +300,22 @@ const server = http.createServer(async (req, res) => {
         latencyMs: Date.now() - startedAt
       });
       session.used = true;
-      res.writeHead(200).end(JSON.stringify({
-        answerSdp,
-        callId,
-        businessId: session.businessId,
-        conversationId: session.conversationId,
-        model,
-        expiresAt: new Date(session.expiresAt).toISOString()
-      }));
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/sdp');
+      res.end(answerSdp);
     } catch (error) {
+      if (error instanceof RealtimeCallUpstreamError) {
+        logger.log('error', 'realtime call failed', {
+          upstreamStatus: error.upstreamStatus,
+          upstreamBodyLength: error.upstreamBody.length,
+        });
+        res.writeHead(500).end(JSON.stringify({
+          error: 'realtime_webrtc_failed',
+          detail: 'OpenAI realtime call failed',
+          upstreamStatus: error.upstreamStatus,
+        }));
+        return;
+      }
       res.writeHead(500).end(JSON.stringify({ error: 'realtime_webrtc_failed', detail: sanitizeErrorMessage(error) }));
     }
     return;

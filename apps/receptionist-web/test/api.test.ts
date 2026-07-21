@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { ApiError, createApiClient } from '../src/api';
-import type { ChatResponse, HealthResponse, RealtimeCallResponse, RealtimeSessionResponse } from '../src/types';
+import type { ChatResponse, HealthResponse, RealtimeSessionResponse } from '../src/types';
 
 describe('createApiClient', () => {
   test('constructs request URLs from the configured base URL', async () => {
@@ -60,16 +60,9 @@ describe('createApiClient', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
-      new Response(JSON.stringify({
-        answerSdp: 'v=0',
-        callId: 'call_1',
-        businessId: 'demo',
-        conversationId: 'conv_1',
-        model: 'gpt-realtime-2.1',
-        expiresAt: '2026-07-20T00:10:00.000Z',
-      } satisfies RealtimeCallResponse), {
+      new Response('v=0', {
         status: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/sdp' },
       }),
       new Response(JSON.stringify({
         message: 'Booked',
@@ -98,14 +91,41 @@ describe('createApiClient', () => {
       conversationId: 'conv_1',
       ephemeralSessionToken: 'ephemeral_1',
     });
-    await expect(client.connectRealtimeCall({ token: 'session_1', sdp: 'v=0' })).resolves.toMatchObject({
-      callId: 'call_1',
-      answerSdp: 'v=0',
-    });
+    await expect(client.connectRealtimeCall({ token: 'session_1', sdp: 'v=0' })).resolves.toBe('v=0');
     await expect(client.sendChat({ message: 'hello' })).resolves.toMatchObject({
       message: 'Booked',
       state: { requestedService: 'Haircut' },
     });
+  });
+
+  test('sends raw SDP with the realtime session token in the header', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response('v=0', {
+        status: 200,
+        headers: { 'Content-Type': 'application/sdp' },
+      }),
+    );
+    const client = createApiClient({
+      baseUrl: 'https://backend.example',
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await client.connectRealtimeCall({ token: 'session_1', sdp: 'fake-offer-sdp' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://backend.example/api/realtime/webrtc',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.any(Headers),
+        body: 'fake-offer-sdp',
+      }),
+    );
+
+    const [, init] = fetchImpl.mock.calls[0] ?? [];
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Content-Type')).toBe('application/sdp');
+    expect(headers.get('X-Realtime-Session-Token')).toBe('session_1');
   });
 
   test('sends message and conversationId in chat requests when provided', async () => {

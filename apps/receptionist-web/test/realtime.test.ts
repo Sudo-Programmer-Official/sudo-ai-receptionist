@@ -211,14 +211,7 @@ describe('RealtimeVoiceController', () => {
 
     api = {
       createRealtimeSession: vi.fn(async () => makeSession()),
-      connectRealtimeCall: vi.fn(async () => ({
-        answerSdp: 'fake-answer-sdp',
-        callId: 'call_1',
-        businessId: 'demo-salon',
-        conversationId: 'conv-1',
-        model: 'gpt-realtime-2.1',
-        expiresAt: '2026-07-20T00:10:00.000Z',
-      })),
+      connectRealtimeCall: vi.fn(async () => 'fake-answer-sdp'),
       sendChat: vi.fn(async (input: { message: string; conversationId?: string }) => ({
         message: input.message,
         state: {

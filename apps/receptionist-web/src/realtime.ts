@@ -356,7 +356,7 @@ export class RealtimeVoiceController {
       throw new Error('Failed to create SDP offer.');
     }
 
-    const answer = await this.api.connectRealtimeCall({
+    const answerSdp = await this.api.connectRealtimeCall({
       token: session.sessionToken,
       sdp: localOffer,
     });
@@ -365,8 +365,8 @@ export class RealtimeVoiceController {
       return session;
     }
 
-    await pc.setRemoteDescription({ type: 'answer', sdp: answer.answerSdp });
-    this.events.onSessionSummary(`${summarizeSession(session)} · call ${answer.callId}`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    this.events.onSessionSummary(`${summarizeSession(session)} · call established`);
     this.events.onMetric({
       name: 'realtime call setup latency',
       valueMs: Math.round(performance.now() - sessionStartedAt),
