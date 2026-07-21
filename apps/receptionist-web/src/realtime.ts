@@ -221,7 +221,7 @@ export class RealtimeVoiceController {
     }
 
     if (this.pc?.connectionState === 'connected' || this.dataChannel?.readyState === 'open') {
-      return this.session;
+      return Promise.resolve(this.session);
     }
 
     this.destroyed = false;
