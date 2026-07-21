@@ -62,6 +62,9 @@ class FakeDataChannel {
 }
 
 class FakeRTCPeerConnection {
+  static localDescriptionSdpOverride: string | null = null;
+  static omitLocalDescription = false;
+
   connectionState: RTCPeerConnectionState = 'new';
   iceConnectionState: RTCIceConnectionState = 'new';
   signalingState: RTCSignalingState = 'stable';
@@ -115,7 +118,12 @@ class FakeRTCPeerConnection {
   }
 
   async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
-    this.localDescription = description as RTCSessionDescription;
+    this.localDescription = FakeRTCPeerConnection.omitLocalDescription
+      ? null
+      : {
+        type: description.type,
+        sdp: FakeRTCPeerConnection.localDescriptionSdpOverride ?? description.sdp ?? null,
+      } as RTCSessionDescription;
     this.iceGatheringState = 'complete';
     this.listeners.get('icegatheringstatechange')?.forEach((handler) => handler());
   }
@@ -274,6 +282,8 @@ describe('RealtimeVoiceController', () => {
       configurable: true,
       value: originalMediaDevices,
     });
+    FakeRTCPeerConnection.localDescriptionSdpOverride = null;
+    FakeRTCPeerConnection.omitLocalDescription = false;
     vi.restoreAllMocks();
   });
 
@@ -333,6 +343,25 @@ describe('RealtimeVoiceController', () => {
     expect(api.sendChat).toHaveBeenCalledTimes(2);
     expect(api.sendChat.mock.calls[0]?.[0]).toMatchObject({ conversationId: 'conv-1' });
     expect(api.sendChat.mock.calls[1]?.[0]).toMatchObject({ conversationId: 'conv-1' });
+  });
+
+  test('posts the finalized localDescription sdp', async () => {
+    FakeRTCPeerConnection.localDescriptionSdpOverride = 'final-local-sdp';
+
+    await controller.connect();
+    await flush();
+
+    expect(api.connectRealtimeCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sdp: 'final-local-sdp',
+      }),
+    );
+  });
+
+  test('fails clearly when the local description is missing', async () => {
+    FakeRTCPeerConnection.omitLocalDescription = true;
+
+    await expect(controller.connect()).rejects.toThrow('Failed to create SDP offer.');
   });
 
   test('speaks the backend response text exactly', async () => {

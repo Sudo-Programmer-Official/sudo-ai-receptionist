@@ -9,7 +9,7 @@ import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
 import { buildCorsHeaders, buildPublicCorsHeaders, parseAllowedOrigins } from './cors.js';
 import { BusinessIdMismatchError, ServerMisconfiguredError, resolveBusinessId, resolveChatText } from './business.js';
 import { resolveRealtimeBusinessContext } from './realtime.js';
-import { parseRealtimeOfferSdp, postRealtimeCall, readRequestText, RealtimeCallUpstreamError } from './realtime-webrtc.js';
+import { parseRealtimeOfferSdp, postRealtimeCall, readRequestText, RealtimeCallUpstreamError, summarizeRealtimeOfferDiagnostics } from './realtime-webrtc.js';
 
 const runtime = loadRuntimeConfig(process.env);
 const adapter =
@@ -261,8 +261,7 @@ const server = http.createServer(async (req, res) => {
       logger.log('info', 'realtime webrtc request received', {
         correlationId: correlationHeader,
         contentType,
-        bodyLength: rawBody.length,
-        startsWithV: rawBody.trim().startsWith('v='),
+        ...summarizeRealtimeOfferDiagnostics(rawBody),
       });
       if (!sessionToken) {
         res.writeHead(400).end(JSON.stringify({ error: 'missing_token_or_sdp' }));

@@ -42,16 +42,33 @@ export const readRequestText = async (req: http.IncomingMessage): Promise<string
   return body;
 };
 
+export const summarizeRealtimeOfferDiagnostics = (sdp: string): {
+  bodyLength: number;
+  startsWithV: boolean;
+  endsWithCRLF: boolean;
+  lineCount: number;
+  containsAudioMediaLine: boolean;
+  containsFingerprint: boolean;
+  containsIceUfrag: boolean;
+} => ({
+  bodyLength: sdp.length,
+  startsWithV: sdp.startsWith('v='),
+  endsWithCRLF: sdp.endsWith('\r\n'),
+  lineCount: sdp.length === 0 ? 0 : sdp.split('\r\n').length,
+  containsAudioMediaLine: sdp.includes('\r\nm=audio '),
+  containsFingerprint: sdp.includes('\r\na=fingerprint:'),
+  containsIceUfrag: sdp.includes('\r\na=ice-ufrag:'),
+});
+
 export const parseRealtimeOfferSdp = (input: string): ParsedRealtimeOffer => {
-  const sdp = input.trim();
-  if (!sdp || !sdp.startsWith('v=')) {
+  if (typeof input !== 'string' || input.length === 0 || !input.startsWith('v=')) {
     return {
       ok: false,
       error: 'invalid_sdp',
       detail: 'A valid SDP offer is required.',
     };
   }
-  return { ok: true, sdp };
+  return { ok: true, sdp: input };
 };
 
 export const postRealtimeCall = async (input: {
