@@ -76,7 +76,7 @@ export const buildCorsHeaders = (origin: string | undefined, allowedOrigins: str
   if (allowed && origin) {
     headers['Access-Control-Allow-Origin'] = normalizeOrigin(origin) ?? origin;
     headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS';
-    headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Correlation-Id, Accept, Authorization';
+    headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Correlation-Id, X-Realtime-Session-Token, Accept, Authorization';
     headers['Access-Control-Max-Age'] = '86400';
   }
   return {

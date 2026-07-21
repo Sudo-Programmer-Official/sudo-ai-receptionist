@@ -25,6 +25,7 @@ describe('cors policy', () => {
     expect(cors.headers['Access-Control-Allow-Origin']).toBe('https://app.example.com');
     expect(cors.headers['Access-Control-Allow-Methods']).toBe('GET,POST,OPTIONS');
     expect(cors.headers['Access-Control-Allow-Headers']).toContain('Authorization');
+    expect(cors.headers['Access-Control-Allow-Headers']).toContain('X-Realtime-Session-Token');
   });
 
   test('denies unknown origins', () => {
