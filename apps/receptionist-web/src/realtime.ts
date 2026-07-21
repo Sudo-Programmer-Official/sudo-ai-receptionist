@@ -34,6 +34,12 @@ const DEFAULT_VOICE = 'alloy';
 
 const safeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
+export const getTranscriptEventDeduplicationKey = (event: RealtimeEvent): string | undefined => {
+  const itemId = safeText(event.item_id);
+  const eventId = safeText(event.event_id) || safeText(event.id);
+  return eventId || itemId || undefined;
+};
+
 const joinLines = (values: Array<string | undefined>): string =>
   values.filter((value): value is string => Boolean(value && value.trim())).join('\n');
 
@@ -651,12 +657,12 @@ export class RealtimeVoiceController {
         return;
       case 'conversation.item.input_audio_transcription.completed': {
         const transcript = safeText(event.transcript);
-        const itemId = safeText(event.item_id);
-        if (!transcript || this.processedTranscripts.has(itemId)) {
+        const dedupeKey = getTranscriptEventDeduplicationKey(event);
+        if (!transcript || (dedupeKey && this.processedTranscripts.has(dedupeKey))) {
           return;
         }
-        if (itemId) {
-          this.processedTranscripts.add(itemId);
+        if (dedupeKey) {
+          this.processedTranscripts.add(dedupeKey);
         }
         this.lastSpeechEndAt = performance.now();
         await this.handleTranscript(transcript);

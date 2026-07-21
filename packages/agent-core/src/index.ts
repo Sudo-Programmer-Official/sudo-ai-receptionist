@@ -143,29 +143,45 @@ const extractPhone = (text: string): string | undefined => {
 };
 
 const extractName = (text: string): string | undefined => {
-  const match = text.match(/(?:i'?m|my name is|this is)\s+([a-z]+(?:\s+[a-z]+){0,2})/i);
-  if (match?.[1]) {
-    return match[1].trim();
-  }
-
-  const bareName = text
+  const normalized = text
     .trim()
     .replace(/[.!?]+$/, '')
     .replace(/\s+/g, ' ');
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (/\b(?:book|schedule|appointment|availability|available|time|slot)\b/i.test(normalized) && /\b(?:tomorrow|today|next|at|\d{1,2}|\d{4})\b/i.test(normalized)) {
+    return undefined;
+  }
+
+  const prefixedMatch = normalized.match(/^(?:my name is|this is|it'?s|its|call me)\s+(.+)$/i);
+  const candidate = prefixedMatch?.[1] ?? normalized;
+  const bareName = candidate
+    .trim()
+    .replace(/[.!?]+$/, '')
+    .replace(/\s+/g, ' ');
+
   if (!bareName) {
     return undefined;
   }
 
-  if (/^(yes|no|ok|okay|confirm|book it|please|thanks|thank you)$/i.test(bareName)) {
+  if (/^(yes|no|ok|okay|confirm|book it|please|thanks|thank you|tomorrow|today|tonight)$/i.test(bareName)) {
     return undefined;
   }
   if (/\b(first|second|third|earliest|latest|option one|option two|option three)\b/i.test(bareName)) {
     return undefined;
   }
+  const hasSchedulingCue = /\b(appointment|book|schedule|service|haircut|cut|color|style|wash|blowout|trim|beard)\b/i.test(bareName);
+  const hasTimeCue = /\b(today|tomorrow|tonight|morning|afternoon|evening|am|pm|next|this|at)\b/i.test(bareName) || /\d/.test(bareName);
+  const hasBookingIntent = /\b(i want|i need|want|need|book|schedule|appointment|service)\b/i.test(bareName);
+  if ((hasSchedulingCue && hasTimeCue) || (hasBookingIntent && hasSchedulingCue)) {
+    return undefined;
+  }
   if (/\d/.test(bareName) || /[:@]/.test(bareName)) {
     return undefined;
   }
-  if (!/^[a-z]+(?:\s+[a-z]+){0,2}$/i.test(bareName)) {
+  if (!/^[a-z]+(?:[ -][a-z]+){0,3}$/i.test(bareName)) {
     return undefined;
   }
   return bareName;
@@ -359,6 +375,12 @@ export class ReceptionistAgent {
       const name = extractName(trimmed);
       if (name) {
         nextState = applyAssistantUpdate(nextState, { customerName: name });
+        return {
+          message: `Thanks, ${name}. What phone number should I use?`,
+          state: nextState,
+          toolStatus,
+          requiresUserAction: true
+        };
       } else {
         return {
           message: 'What name should I put on the appointment?',

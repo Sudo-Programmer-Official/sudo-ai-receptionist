@@ -239,7 +239,7 @@ describe('ReceptionistAgent', () => {
     });
   });
 
-  it('accepts a bare customer name instead of repeating the prompt', async () => {
+  it('accepts a bare customer name and advances to phone collection', async () => {
     const { adapter } = createTestAdapter(makeSlots([
       '2026-07-21T16:00:00.000Z',
       '2026-07-21T16:15:00.000Z',
@@ -267,7 +267,142 @@ describe('ReceptionistAgent', () => {
     });
 
     expect(thirdTurn.state.customerName).toBe('Abhi');
-    expect(thirdTurn.message).toBe('What is the best phone number for confirmation?');
+    expect(thirdTurn.message).toBe('Thanks, Abhi. What phone number should I use?');
+    expect(thirdTurn.state.customerPhone).toBeUndefined();
+  });
+
+  it('accepts a prefixed customer name and advances to phone collection', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'My name is Abhi',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    expect(thirdTurn.state.customerName).toBe('Abhi');
+    expect(thirdTurn.message).toBe('Thanks, Abhi. What phone number should I use?');
+  });
+
+  it.each([
+    '5551234567',
+    'yes',
+  ])('rejects %s as a customer name', async (text) => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text,
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    expect(thirdTurn.state.customerName).toBeUndefined();
+    expect(thirdTurn.message).toBe('What name should I put on the appointment?');
+  });
+
+  it('does not ask for the name again when customerName already exists', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'Abhi',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    const fourthTurn = await agent.handleTurn({
+      text: 'hello',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: { ...thirdTurn.state, customerPhone: undefined },
+    });
+
+    expect(fourthTurn.message).not.toBe('What name should I put on the appointment?');
+    expect(fourthTurn.message).toBe('What is the best phone number for confirmation?');
+  });
+
+  it('rejects a new booking request while waiting for the customer name', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow morning',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    expect(thirdTurn.state.customerName).toBeUndefined();
+    expect(thirdTurn.message).toBe('What name should I put on the appointment?');
   });
 
   it('does not throw on invalid dates and asks for clarification', async () => {
