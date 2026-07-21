@@ -211,11 +211,16 @@ describe('RealtimeVoiceController', () => {
   let dataChannel: FakeDataChannel;
   let transcripts: Array<[string, string]>;
   let states: string[];
+  let errors: string[];
   let audioElement: HTMLAudioElement;
 
-  const createController = async (): Promise<void> => {
+  const createController = async (autoConnect = true): Promise<void> => {
+    if (controller) {
+      await controller.dispose();
+    }
     transcripts = [];
     states = [];
+    errors = [];
 
     api = {
       createRealtimeSession: vi.fn(async () => makeSession()),
@@ -261,19 +266,23 @@ describe('RealtimeVoiceController', () => {
         onToolStatus: () => undefined,
         onMetric: () => undefined,
         onDiagnostics: () => undefined,
-        onError: () => undefined,
+        onError: (message) => errors.push(message),
       },
       audioElement,
     );
 
-    await controller.connect();
-    await flush();
+    if (autoConnect) {
+      await controller.connect();
+      await flush();
 
-    const pc = (controller as unknown as { pc: FakeRTCPeerConnection | null }).pc;
-    if (!pc || pc.dataChannels.length === 0) {
-      throw new Error('Expected a fake data channel to be created');
+      const pc = (controller as unknown as { pc: FakeRTCPeerConnection | null }).pc;
+      if (!pc || pc.dataChannels.length === 0) {
+        throw new Error('Expected a fake data channel to be created');
+      }
+      dataChannel = pc.dataChannels[0] as unknown as FakeDataChannel;
+    } else {
+      dataChannel = undefined as unknown as FakeDataChannel;
     }
-    dataChannel = pc.dataChannels[0] as unknown as FakeDataChannel;
   };
 
   afterEach(() => {
@@ -346,6 +355,7 @@ describe('RealtimeVoiceController', () => {
   });
 
   test('posts the finalized localDescription sdp', async () => {
+    await createController(false);
     FakeRTCPeerConnection.localDescriptionSdpOverride = 'final-local-sdp';
 
     await controller.connect();
@@ -359,6 +369,7 @@ describe('RealtimeVoiceController', () => {
   });
 
   test('fails clearly when the local description is missing', async () => {
+    await createController(false);
     FakeRTCPeerConnection.omitLocalDescription = true;
 
     await expect(controller.connect()).rejects.toThrow('Failed to create SDP offer.');
@@ -391,4 +402,146 @@ describe('RealtimeVoiceController', () => {
     expect(payloads.some((payload) => payload.type === 'output_audio_buffer.clear')).toBe(true);
     expect(states).toContain('interrupted');
   });
+
+  test('concurrent connect calls share one promise and one session request', async () => {
+    await createController(false);
+    const first = controller.connect();
+    const second = controller.connect();
+
+    expect(first).toBe(second);
+
+    await first;
+    await flush();
+
+    expect(api.createRealtimeSession).toHaveBeenCalledTimes(1);
+    expect(api.connectRealtimeCall).toHaveBeenCalledTimes(1);
+  });
+
+  test('double-click Start results in one session request and one webrtc request', async () => {
+    await createController(false);
+    const first = controller.connect();
+    const second = controller.connect();
+
+    expect(first).toBe(second);
+
+    await first;
+    await flush();
+
+    expect(api.createRealtimeSession).toHaveBeenCalledTimes(1);
+    expect(api.connectRealtimeCall).toHaveBeenCalledTimes(1);
+  });
+
+  test('stale attempt failure cannot overwrite newer success', async () => {
+    await createController(false);
+    const firstSessionDeferred = defer<RealtimeSessionResponse>();
+    const firstAnswerDeferred = defer<string>();
+    let sessionCallCount = 0;
+    let webrtcCallCount = 0;
+    api.createRealtimeSession.mockImplementation(async () => {
+      sessionCallCount += 1;
+      if (sessionCallCount === 1) {
+        return firstSessionDeferred.promise;
+      }
+      return makeSession({ conversationId: 'conv-2' });
+    });
+    api.connectRealtimeCall.mockImplementation(async () => {
+      webrtcCallCount += 1;
+      if (webrtcCallCount === 1) {
+        return firstAnswerDeferred.promise;
+      }
+      return 'second-answer-sdp';
+    });
+
+    const firstConnect = controller.connect();
+    await flush();
+    firstSessionDeferred.resolve(makeSession({ conversationId: 'conv-1' }));
+    await flush();
+    await controller.disconnect();
+    const secondConnect = controller.connect();
+    await flush();
+    firstAnswerDeferred.reject(new Error('stale upstream failure'));
+    await secondConnect;
+    await flush();
+    await firstConnect;
+    await flush();
+
+    expect(errors).not.toContain('stale upstream failure');
+    expect(states).not.toContain('error');
+    expect(api.createRealtimeSession).toHaveBeenCalledTimes(2);
+    expect(api.connectRealtimeCall).toHaveBeenCalledTimes(2);
+  });
+
+  test('timeout is cleared after a successful connection', async () => {
+    vi.useFakeTimers();
+    const microFlush = async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    try {
+      await createController(false);
+
+      await controller.connect();
+      await microFlush();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await microFlush();
+
+      expect(errors).not.toContain('Realtime connection readiness timed out.');
+      expect(states).not.toContain('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('old peer connection events are ignored after reconnect', async () => {
+    await createController(false);
+
+    const firstConnect = controller.connect();
+    await firstConnect;
+    await flush();
+    const firstPc = (controller as unknown as { pc: FakeRTCPeerConnection | null }).pc;
+    if (!firstPc) {
+      throw new Error('Expected the first peer connection');
+    }
+
+    await controller.disconnect();
+    await controller.connect();
+    await flush();
+
+    firstPc.connectionState = 'failed';
+    firstPc.onconnectionstatechange?.(new Event('connectionstatechange'));
+    firstPc.iceConnectionState = 'failed';
+    firstPc.oniceconnectionstatechange?.(new Event('iceconnectionstatechange'));
+    await flush();
+
+    expect(errors).not.toContain('WebRTC connection failed.');
+    expect(errors).not.toContain('ICE negotiation failed.');
+  });
+
+  test('end call invalidates the current attempt and reconnect creates a fresh session', async () => {
+    await createController(false);
+    await controller.connect();
+    await flush();
+    await controller.disconnect();
+    await controller.connect();
+    await flush();
+
+    expect(api.createRealtimeSession).toHaveBeenCalledTimes(2);
+    expect(api.connectRealtimeCall).toHaveBeenCalledTimes(2);
+  });
 });
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+};
+
+const defer = <T>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};

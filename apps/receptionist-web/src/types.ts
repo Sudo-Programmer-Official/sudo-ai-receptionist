@@ -50,6 +50,10 @@ export type LatencyMetric = {
 };
 
 export type RealtimeDiagnostics = {
+  connectionAttemptId: number;
+  connectInFlight: boolean;
+  sessionRequestCount: number;
+  webrtcRequestCount: number;
   peerConnectionState: string;
   iceConnectionState: string;
   signalingState: string;
@@ -58,6 +62,8 @@ export type RealtimeDiagnostics = {
   remoteAudioReceived: boolean;
   lastEventType: string;
   lastErrorMessage: string;
+  lastErrorSource: string;
+  lastSuccessfulMilestone: string;
   finalTranscriptCount?: number;
   duplicateTranscriptEventsIgnored?: number;
   interruptionCount?: number;

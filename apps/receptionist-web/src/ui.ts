@@ -579,6 +579,10 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     toolStatus: [],
     metrics: [],
     diagnostics: {
+      connectionAttemptId: 0,
+      connectInFlight: false,
+      sessionRequestCount: 0,
+      webrtcRequestCount: 0,
       peerConnectionState: 'idle',
       iceConnectionState: 'idle',
       signalingState: 'idle',
@@ -587,6 +591,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       remoteAudioReceived: false,
       lastEventType: 'none',
       lastErrorMessage: 'none',
+      lastErrorSource: 'none',
+      lastSuccessfulMilestone: 'idle',
     },
   };
   let callStartedAtMs: number | null = null;
@@ -833,6 +839,10 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         state.diagnostics = diagnostics;
         dom.diagnosticsList.innerHTML = '';
         const rows: Array<[string, unknown]> = [
+          ['Attempt', diagnostics.connectionAttemptId],
+          ['Connect in flight', diagnostics.connectInFlight],
+          ['Session requests', diagnostics.sessionRequestCount],
+          ['WebRTC requests', diagnostics.webrtcRequestCount],
           ['Peer connection', diagnostics.peerConnectionState],
           ['ICE connection', diagnostics.iceConnectionState],
           ['Signaling', diagnostics.signalingState],
@@ -841,6 +851,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           ['Remote audio', diagnostics.remoteAudioReceived],
           ['Last event', diagnostics.lastEventType],
           ['Last error', diagnostics.lastErrorMessage],
+          ['Last error source', diagnostics.lastErrorSource],
+          ['Last milestone', diagnostics.lastSuccessfulMilestone],
           ['Final transcripts', diagnostics.finalTranscriptCount ?? 0],
           ['Duplicates ignored', diagnostics.duplicateTranscriptEventsIgnored ?? 0],
           ['Interruptions', diagnostics.interruptionCount ?? 0],
@@ -893,7 +905,14 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
 
   const updateConnectButton = (): void => {
     const hasSession = Boolean(state.session);
-    const label = !hasSession
+    const connectLocked =
+      controller.isConnectInFlight() ||
+      state.voiceState === 'connecting' ||
+      state.connectionState === 'session_created' ||
+      state.connectionState === 'webrtc_connecting';
+    const label = connectLocked && !hasSession
+      ? 'Connecting...'
+      : !hasSession
       ? 'Start call'
       : state.voiceState === 'connecting'
         ? 'Connecting...'
@@ -916,10 +935,11 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
                         : state.voiceState === 'booked'
                           ? 'Booked'
                           : state.voiceState === 'interrupted'
-                            ? 'Interrupted'
+                          ? 'Interrupted'
                             : 'End call';
     dom.connectLabel.textContent = label;
     dom.connectBtn.setAttribute('aria-label', hasSession ? 'End call' : 'Start call');
+    dom.connectBtn.disabled = connectLocked;
     dom.connectBtn.classList.add('primary');
     dom.connectBtn.classList.remove('danger');
   };
@@ -956,11 +976,28 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       await disconnect();
       return;
     }
+    if (
+      controller.isConnectInFlight() ||
+      state.voiceState === 'connecting' ||
+      state.connectionState === 'session_created' ||
+      state.connectionState === 'webrtc_connecting'
+    ) {
+      return;
+    }
     state.voiceState = 'connecting';
+    dom.sessionSummary.textContent = 'Creating the live voice session...';
+    setChipState(dom.connectionState, 'Connecting', 'warn');
+    setStatusDot(dom.connectionDot, 'warn');
     updateConnectButton();
     renderStages();
     try {
       const session = await controller.connect(state.conversation ?? undefined);
+      if (!session) {
+        updateConnectButton();
+        renderReadiness();
+        renderStages();
+        return;
+      }
       state.session = session;
       dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
       renderConversationSummary();
