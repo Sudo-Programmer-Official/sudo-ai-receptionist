@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "vite build",
+    "build": "npm run build --prefix ../../packages/shared && vite build",
     "preview": "vite preview",
     "test": "vitest run"
   },
