@@ -250,6 +250,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/realtime/webrtc' && req.method === 'POST') {
+    let realtimeSessionMeta: { businessId: string; conversationId: string } | undefined;
     try {
       pruneRealtimeSessions();
       const contentType = req.headers['content-type']?.toString().toLowerCase() ?? '';
@@ -284,17 +285,28 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(409).end(JSON.stringify({ error: 'session_already_used' }));
         return;
       }
+      realtimeSessionMeta = {
+        businessId: session.businessId,
+        conversationId: session.conversationId,
+      };
       const model = runtime.openaiRealtimeModel ?? 'gpt-realtime-2.1';
       const instructions = buildRealtimeInstructions({
         conversation: session.state,
         businessContext: session.businessContext,
         model
       });
+      const voice = 'alloy';
+      logger.log('info', 'realtime call requested', {
+        businessId: session.businessId,
+        conversationId: session.conversationId,
+        model,
+        voice,
+      });
       const startedAt = Date.now();
       const { answerSdp, callId } = await postRealtimeCall({
         offerSdp: parsedOffer.sdp,
         model,
-        voice: 'alloy',
+        voice,
         instructions,
         openAiApiKey: runtime.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '',
         safetyIdentifier: 'sudo-ai-receptionist',
@@ -312,13 +324,17 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       if (error instanceof RealtimeCallUpstreamError) {
         logger.log('error', 'realtime call failed', {
+          businessId: realtimeSessionMeta?.businessId,
+          conversationId: realtimeSessionMeta?.conversationId,
           upstreamStatus: error.upstreamStatus,
           upstreamBodyLength: error.upstreamBody.length,
+          upstreamError: error.upstreamError,
         });
         res.writeHead(500).end(JSON.stringify({
           error: 'realtime_webrtc_failed',
           detail: 'OpenAI realtime call failed',
           upstreamStatus: error.upstreamStatus,
+          upstreamError: error.upstreamError,
         }));
         return;
       }

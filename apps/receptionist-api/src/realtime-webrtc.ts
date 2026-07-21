@@ -15,11 +15,19 @@ export type RealtimeCallSuccess = {
   callId: string;
 };
 
+export type OpenAIRealtimeError = {
+  message?: string;
+  type?: string;
+  code?: string | null;
+  param?: string | null;
+};
+
 export class RealtimeCallUpstreamError extends Error {
   constructor(
     message: string,
     public readonly upstreamStatus: number,
     public readonly upstreamBody: string,
+    public readonly upstreamError?: OpenAIRealtimeError,
   ) {
     super(message);
     this.name = 'RealtimeCallUpstreamError';
@@ -63,21 +71,17 @@ export const postRealtimeCall = async (input: {
     type: 'realtime',
     model: input.model,
     instructions: input.instructions,
-    output_modalities: ['audio'],
-    max_output_tokens: 256,
-    turn_detection: {
-      type: 'server_vad',
-      prefix_padding_ms: 300,
-      silence_duration_ms: 350,
-      threshold: 0.5,
-      create_response: false,
-      interrupt_response: true,
-    },
-    input_audio_transcription: {
-      model: 'gpt-4o-mini-transcribe',
-      language: 'en',
-    },
     audio: {
+      input: {
+        transcription: {
+          model: 'gpt-4o-mini-transcribe',
+        },
+        turn_detection: {
+          type: 'server_vad',
+          create_response: false,
+          interrupt_response: true,
+        },
+      },
       output: {
         voice: input.voice,
       },
@@ -85,8 +89,8 @@ export const postRealtimeCall = async (input: {
   };
 
   const formData = new FormData();
-  formData.set('sdp', new Blob([input.offerSdp], { type: 'application/sdp' }), 'offer.sdp');
-  formData.set('session', new Blob([JSON.stringify(sessionConfig)], { type: 'application/json' }), 'session.json');
+  formData.set('sdp', input.offerSdp);
+  formData.set('session', JSON.stringify(sessionConfig));
 
   const response = await fetchImpl('https://api.openai.com/v1/realtime/calls', {
     method: 'POST',
@@ -99,10 +103,18 @@ export const postRealtimeCall = async (input: {
 
   const responseText = await response.text();
   if (!response.ok) {
+    let upstreamError: OpenAIRealtimeError | undefined;
+    try {
+      const parsed = JSON.parse(responseText) as { error?: OpenAIRealtimeError };
+      upstreamError = parsed.error;
+    } catch {
+      upstreamError = { message: responseText.slice(0, 500) };
+    }
     throw new RealtimeCallUpstreamError(
       'OpenAI realtime call failed',
       response.status,
       responseText,
+      upstreamError,
     );
   }
 
