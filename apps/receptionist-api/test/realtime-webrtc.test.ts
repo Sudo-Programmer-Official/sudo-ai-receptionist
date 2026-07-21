@@ -44,9 +44,7 @@ describe('realtime WebRTC transport', () => {
       offerSdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1',
       model: 'gpt-realtime-2.1',
       voice: 'alloy',
-      instructions: 'Speak naturally.',
       openAiApiKey: 'sk-test',
-      safetyIdentifier: 'safety-id',
       fetchImpl: fetchImpl as typeof fetch,
     })).resolves.toEqual({
       answerSdp: 'v=0\r\nanswer',
@@ -59,18 +57,7 @@ describe('realtime WebRTC transport', () => {
     expect(body.get('session')).toBe(JSON.stringify({
       type: 'realtime',
       model: 'gpt-realtime-2.1',
-      instructions: 'Speak naturally.',
       audio: {
-        input: {
-          transcription: {
-            model: 'gpt-4o-mini-transcribe',
-          },
-          turn_detection: {
-            type: 'server_vad',
-            create_response: false,
-            interrupt_response: true,
-          },
-        },
         output: {
           voice: 'alloy',
         },
@@ -79,7 +66,6 @@ describe('realtime WebRTC transport', () => {
 
     const headers = new Headers(capturedInit?.headers);
     expect(headers.get('Authorization')).toBe('Bearer sk-test');
-    expect(headers.get('OpenAI-Safety-Identifier')).toBe('safety-id');
     expect(headers.has('Content-Type')).toBe(false);
   });
 
@@ -94,9 +80,7 @@ describe('realtime WebRTC transport', () => {
       offerSdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1',
       model: 'gpt-realtime-2.1',
       voice: 'alloy',
-      instructions: 'Speak naturally.',
       openAiApiKey: 'sk-test',
-      safetyIdentifier: 'safety-id',
       fetchImpl: fetchImpl as typeof fetch,
     })).rejects.toMatchObject({
       upstreamStatus: 400,
@@ -122,9 +106,7 @@ describe('realtime WebRTC transport', () => {
       offerSdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1',
       model: 'gpt-realtime-2.1',
       voice: 'alloy',
-      instructions: 'Speak naturally.',
       openAiApiKey: 'sk-test',
-      safetyIdentifier: 'safety-id',
       fetchImpl: fetchImpl as typeof fetch,
     })).rejects.toMatchObject({
       upstreamStatus: 400,

@@ -58,9 +58,7 @@ export const postRealtimeCall = async (input: {
   offerSdp: string;
   model: string;
   voice: string;
-  instructions: string;
   openAiApiKey: string;
-  safetyIdentifier: string;
   fetchImpl?: typeof fetch;
 }): Promise<RealtimeCallSuccess> => {
   const fetchImpl = input.fetchImpl ?? fetch;
@@ -70,18 +68,7 @@ export const postRealtimeCall = async (input: {
   const sessionConfig = {
     type: 'realtime',
     model: input.model,
-    instructions: input.instructions,
     audio: {
-      input: {
-        transcription: {
-          model: 'gpt-4o-mini-transcribe',
-        },
-        turn_detection: {
-          type: 'server_vad',
-          create_response: false,
-          interrupt_response: true,
-        },
-      },
       output: {
         voice: input.voice,
       },
@@ -96,7 +83,6 @@ export const postRealtimeCall = async (input: {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${input.openAiApiKey}`,
-      'OpenAI-Safety-Identifier': input.safetyIdentifier,
     },
     body: formData,
   });

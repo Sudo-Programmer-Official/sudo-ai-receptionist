@@ -290,12 +290,7 @@ const server = http.createServer(async (req, res) => {
         conversationId: session.conversationId,
       };
       const model = runtime.openaiRealtimeModel ?? 'gpt-realtime-2.1';
-      const instructions = buildRealtimeInstructions({
-        conversation: session.state,
-        businessContext: session.businessContext,
-        model
-      });
-      const voice = 'alloy';
+      const voice = 'marin';
       logger.log('info', 'realtime call requested', {
         businessId: session.businessId,
         conversationId: session.conversationId,
@@ -307,9 +302,7 @@ const server = http.createServer(async (req, res) => {
         offerSdp: parsedOffer.sdp,
         model,
         voice,
-        instructions,
         openAiApiKey: runtime.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '',
-        safetyIdentifier: 'sudo-ai-receptionist',
       });
       logger.log('info', 'realtime call established', {
         businessId: session.businessId,
