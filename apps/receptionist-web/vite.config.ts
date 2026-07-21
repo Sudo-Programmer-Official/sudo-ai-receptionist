@@ -1,6 +1,12 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@sudo-ai-receptionist/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
