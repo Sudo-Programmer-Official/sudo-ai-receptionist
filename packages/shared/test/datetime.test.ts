@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
+  formatCustomerConfirmationMessage,
+  formatCustomerSuccessMessage,
   formatSlotForCustomer,
   formatSlotOptions,
   InvalidUtcTimestampError,
@@ -87,6 +89,34 @@ describe('datetime utilities', () => {
 
     expect(message).toBe('I found three openings tomorrow: 11:00 AM, 11:15 AM, and 11:30 AM. Which one works best?');
     expect(message).not.toContain('2026-07-21T');
+  });
+
+  test('formats customer-facing confirmation and success messages without redaction markers', () => {
+    const confirmation = formatCustomerConfirmationMessage({
+      serviceName: 'Gel',
+      customerName: 'Abhi',
+      customerPhone: '(361) 442-9376',
+      staffName: 'Abhi',
+      localDateLabel: 'tomorrow',
+      localTimeLabel: '12:00 PM',
+    });
+    const success = formatCustomerSuccessMessage({
+      serviceName: 'Gel',
+      customerName: 'Abhi',
+      customerPhone: '(361) 442-9376',
+      staffName: 'Abhi',
+      localDateLabel: 'tomorrow',
+      localTimeLabel: '12:00 PM',
+    });
+
+    expect(confirmation).toBe(
+      'Just to confirm: Gel tomorrow at 12:00 PM with Abhi, for Abhi. I’ll use the phone number ending in 9376. Should I book it?',
+    );
+    expect(success).toBe('Booked. Gel is confirmed for Abhi tomorrow at 12:00 PM with Abhi.');
+    expect(confirmation).not.toContain('[redacted-name]');
+    expect(confirmation).not.toContain('[redacted-phone]');
+    expect(success).not.toContain('[redacted-name]');
+    expect(success).not.toContain('[redacted-phone]');
   });
 
   test('keeps ISO dates and timestamps out of phone redaction paths', () => {

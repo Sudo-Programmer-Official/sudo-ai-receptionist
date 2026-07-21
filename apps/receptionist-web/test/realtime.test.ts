@@ -1,5 +1,159 @@
-import { describe, expect, test } from 'vitest';
-import { getTranscriptEventDeduplicationKey } from '../src/realtime';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { RealtimeVoiceController, getTranscriptEventDeduplicationKey } from '../src/realtime';
+import type { ApiClient } from '../src/api';
+import type { ChatResponse, ConversationStateSnapshot, RealtimeSessionResponse } from '../src/types';
+
+type DataChannelFrame = Record<string, unknown>;
+
+class FakeMediaStreamTrack {
+  readonly kind = 'audio';
+  readonly id = `track_${Math.random().toString(36).slice(2, 10)}`;
+  enabled = true;
+  readyState: MediaStreamTrackState = 'live';
+
+  stop(): void {
+    this.readyState = 'ended';
+  }
+}
+
+class FakeMediaStream {
+  private readonly tracks: FakeMediaStreamTrack[] = [];
+
+  addTrack(track: FakeMediaStreamTrack): void {
+    if (!this.tracks.some((existing) => existing.id === track.id)) {
+      this.tracks.push(track);
+    }
+  }
+
+  getAudioTracks(): FakeMediaStreamTrack[] {
+    return this.tracks.filter((track) => track.kind === 'audio');
+  }
+
+  getTracks(): FakeMediaStreamTrack[] {
+    return [...this.tracks];
+  }
+}
+
+class FakeDataChannel {
+  readyState: RTCDataChannelState = 'connecting';
+  onopen: ((this: RTCDataChannel, ev: Event) => unknown) | null = null;
+  onclose: ((this: RTCDataChannel, ev: Event) => unknown) | null = null;
+  onerror: ((this: RTCDataChannel, ev: Event) => unknown) | null = null;
+  onmessage: ((this: RTCDataChannel, ev: MessageEvent) => unknown) | null = null;
+  readonly sent: string[] = [];
+
+  open(): void {
+    this.readyState = 'open';
+    this.onopen?.(new Event('open') as Event);
+  }
+
+  close(): void {
+    this.readyState = 'closed';
+    this.onclose?.(new Event('close') as Event);
+  }
+
+  send(payload: string): void {
+    this.sent.push(payload);
+  }
+
+  emit(frame: DataChannelFrame): void {
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
+  }
+}
+
+class FakeRTCPeerConnection {
+  connectionState: RTCPeerConnectionState = 'new';
+  iceConnectionState: RTCIceConnectionState = 'new';
+  signalingState: RTCSignalingState = 'stable';
+  iceGatheringState: RTCIceGatheringState = 'new';
+  ontrack: ((this: RTCPeerConnection, ev: RTCTrackEvent) => unknown) | null = null;
+  onconnectionstatechange: ((this: RTCPeerConnection, ev: Event) => unknown) | null = null;
+  oniceconnectionstatechange: ((this: RTCPeerConnection, ev: Event) => unknown) | null = null;
+  onsignalingstatechange: ((this: RTCPeerConnection, ev: Event) => unknown) | null = null;
+  localDescription: RTCSessionDescription | null = null;
+  readonly dataChannels: FakeDataChannel[] = [];
+  private readonly listeners = new Map<string, Set<() => void>>();
+  private readonly sender = {
+    track: null as FakeMediaStreamTrack | null,
+    replaceTrack: vi.fn(async (track: FakeMediaStreamTrack | null) => {
+      this.sender.track = track;
+    }),
+  } as unknown as RTCRtpSender;
+
+  addEventListener(type: string, handler: EventListenerOrEventListenerObject): void {
+    if (typeof handler !== 'function') {
+      return;
+    }
+    const handlers = this.listeners.get(type) ?? new Set<() => void>();
+    handlers.add(handler);
+    this.listeners.set(type, handlers);
+  }
+
+  removeEventListener(type: string, handler: EventListenerOrEventListenerObject): void {
+    if (typeof handler !== 'function') {
+      return;
+    }
+    this.listeners.get(type)?.delete(handler);
+  }
+
+  addTrack(track: FakeMediaStreamTrack): RTCRtpSender {
+    this.sender.track = track;
+    return this.sender;
+  }
+
+  createDataChannel(): RTCDataChannel {
+    const channel = new FakeDataChannel() as unknown as RTCDataChannel;
+    this.dataChannels.push(channel as unknown as FakeDataChannel);
+    queueMicrotask(() => {
+      (channel as unknown as FakeDataChannel).open();
+    });
+    return channel;
+  }
+
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'offer', sdp: 'fake-offer-sdp' };
+  }
+
+  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.localDescription = description as RTCSessionDescription;
+    this.iceGatheringState = 'complete';
+    this.listeners.get('icegatheringstatechange')?.forEach((handler) => handler());
+  }
+
+  async setRemoteDescription(_description: RTCSessionDescriptionInit): Promise<void> {
+    this.connectionState = 'connected';
+    this.onconnectionstatechange?.(new Event('connectionstatechange'));
+  }
+
+  close(): void {
+    this.connectionState = 'closed';
+    this.onconnectionstatechange?.(new Event('connectionstatechange'));
+    for (const channel of this.dataChannels) {
+      channel.close();
+    }
+  }
+}
+
+const makeSession = (overrides: Partial<RealtimeSessionResponse> = {}): RealtimeSessionResponse => ({
+  businessId: 'demo-salon',
+  conversationId: 'conv-1',
+  sessionToken: 'session_1',
+  ephemeralSessionToken: 'session_1',
+  webrtcUrl: '/api/realtime/webrtc',
+  expiresAt: '2026-07-20T00:10:00.000Z',
+  model: 'gpt-realtime-2.1',
+  instructions: 'voice renderer',
+  businessContext: {
+    businessName: 'Demo Salon',
+    serviceNames: ['Haircut'],
+  },
+  ...overrides,
+});
+
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => queueMicrotask(resolve));
+};
 
 describe('realtime transcript dedupe', () => {
   test('uses item or event ids to suppress duplicate transcript events', () => {
@@ -34,5 +188,185 @@ describe('realtime transcript dedupe', () => {
     }
     expect(seen.has(duplicateItemKey ?? '')).toBe(true);
     expect(seen.has(duplicateEventKey ?? '')).toBe(false);
+  });
+});
+
+describe('RealtimeVoiceController', () => {
+  const originalMediaDevices = navigator.mediaDevices;
+
+  let api: {
+    createRealtimeSession: ReturnType<typeof vi.fn>;
+    connectRealtimeCall: ReturnType<typeof vi.fn>;
+    sendChat: ReturnType<typeof vi.fn>;
+  };
+  let controller: RealtimeVoiceController;
+  let dataChannel: FakeDataChannel;
+  let transcripts: Array<[string, string]>;
+  let states: string[];
+  let audioElement: HTMLAudioElement;
+
+  const createController = async (): Promise<void> => {
+    transcripts = [];
+    states = [];
+
+    api = {
+      createRealtimeSession: vi.fn(async () => makeSession()),
+      connectRealtimeCall: vi.fn(async () => ({
+        answerSdp: 'fake-answer-sdp',
+        callId: 'call_1',
+        businessId: 'demo-salon',
+        conversationId: 'conv-1',
+        model: 'gpt-realtime-2.1',
+        expiresAt: '2026-07-20T00:10:00.000Z',
+      })),
+      sendChat: vi.fn(async (input: { message: string; conversationId?: string }) => ({
+        message: input.message,
+        state: {
+          conversationId: input.conversationId ?? 'conv-1',
+          businessId: 'demo-salon',
+          proposedSlots: [],
+          bookingConfirmationStatus: 'unconfirmed',
+        } satisfies ConversationStateSnapshot,
+        requiresUserAction: true,
+      } satisfies ChatResponse)),
+    };
+
+    vi.stubGlobal('RTCPeerConnection', FakeRTCPeerConnection as unknown as typeof RTCPeerConnection);
+    vi.stubGlobal('MediaStream', FakeMediaStream as unknown as typeof MediaStream);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(async () => {
+          const stream = new FakeMediaStream();
+          stream.addTrack(new FakeMediaStreamTrack());
+          return stream;
+        }),
+      },
+    });
+
+    audioElement = document.createElement('audio');
+    audioElement.play = vi.fn(async () => undefined);
+    audioElement.pause = vi.fn();
+
+    controller = new RealtimeVoiceController(
+      api as unknown as ApiClient,
+      {
+        onStateChange: (state) => states.push(state),
+        onConnectionStateChange: () => undefined,
+        onMicStateChange: () => undefined,
+        onTranscript: (role, text) => transcripts.push([role, text]),
+        onSessionSummary: () => undefined,
+        onConversationState: () => undefined,
+        onToolStatus: () => undefined,
+        onMetric: () => undefined,
+        onDiagnostics: () => undefined,
+        onError: () => undefined,
+      },
+      audioElement,
+    );
+
+    await controller.connect();
+    await flush();
+
+    const pc = (controller as unknown as { pc: FakeRTCPeerConnection | null }).pc;
+    if (!pc || pc.dataChannels.length === 0) {
+      throw new Error('Expected a fake data channel to be created');
+    }
+    dataChannel = pc.dataChannels[0] as unknown as FakeDataChannel;
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: originalMediaDevices,
+    });
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(async () => {
+    await createController();
+  });
+
+  test('forwards only final transcript events to /api/chat once', async () => {
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.partial',
+      item_id: 'item-1',
+      transcript: 'hel',
+    });
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-1',
+      transcript: 'hello',
+    });
+    await flush();
+
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(api.sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'hello',
+        conversationId: 'conv-1',
+      }),
+    );
+  });
+
+  test('ignores duplicate transcript item ids', async () => {
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-2',
+      transcript: 'hello',
+    });
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-2',
+      transcript: 'hello',
+    });
+    await flush();
+
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    expect(transcripts.filter(([role]) => role === 'user')).toHaveLength(1);
+  });
+
+  test('reuses the same conversation id for follow-up turns', async () => {
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-3',
+      transcript: 'hello',
+    });
+    await flush();
+
+    await controller.sendText('yes');
+
+    expect(api.sendChat).toHaveBeenCalledTimes(2);
+    expect(api.sendChat.mock.calls[0]?.[0]).toMatchObject({ conversationId: 'conv-1' });
+    expect(api.sendChat.mock.calls[1]?.[0]).toMatchObject({ conversationId: 'conv-1' });
+  });
+
+  test('speaks the backend response text exactly', async () => {
+    await controller.sendText('hello');
+    await flush();
+
+    const assistantTurn = transcripts.find(([role]) => role === 'assistant');
+    expect(assistantTurn?.[1]).toBe('hello');
+    const payloads = dataChannel.sent.map((payload) => JSON.parse(payload) as { item?: { content?: Array<{ text?: string }> } });
+    const rendered = payloads.find((payload) => payload.item?.content?.[0]?.text);
+    expect(rendered?.item?.content?.[0]?.text).toBe('hello');
+  });
+
+  test('cancels the assistant response when interrupted by new speech', async () => {
+    dataChannel.emit({
+      type: 'conversation.item.input_audio_transcription.completed',
+      item_id: 'item-4',
+      transcript: 'hello',
+    });
+    await flush();
+    dataChannel.emit({ type: 'response.audio.delta' });
+    dataChannel.emit({ type: 'input_audio_buffer.speech_started' });
+    await flush();
+
+    const payloads = dataChannel.sent.map((payload) => JSON.parse(payload) as { type?: string });
+    expect(payloads.some((payload) => payload.type === 'response.cancel')).toBe(true);
+    expect(payloads.some((payload) => payload.type === 'output_audio_buffer.clear')).toBe(true);
+    expect(states).toContain('interrupted');
   });
 });

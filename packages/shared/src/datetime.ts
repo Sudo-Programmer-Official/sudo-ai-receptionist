@@ -360,6 +360,27 @@ export const formatTimeZoneLabel = (timezone: string): string => {
   }
 };
 
+export type BookingPresentationInput = {
+  serviceName: string;
+  customerName: string;
+  customerPhone: string;
+  staffName: string;
+  localDateLabel: string;
+  localTimeLabel: string;
+};
+
+const maskPhoneForDisplay = (phone: string): string => {
+  const digits = phone.replace(/\D/g, '');
+  const ending = digits.slice(-4);
+  return ending ? `phone number ending in ${ending}` : 'phone number';
+};
+
+export const formatCustomerConfirmationMessage = (input: BookingPresentationInput): string =>
+  `Just to confirm: ${input.serviceName} ${input.localDateLabel} at ${input.localTimeLabel} with ${input.staffName}, for ${input.customerName}. I’ll use the ${maskPhoneForDisplay(input.customerPhone)}. Should I book it?`;
+
+export const formatCustomerSuccessMessage = (input: BookingPresentationInput): string =>
+  `Booked. ${input.serviceName} is confirmed for ${input.customerName} ${input.localDateLabel} at ${input.localTimeLabel} with ${input.staffName}.`;
+
 export const formatSlotOptions = (
   slots: ReadonlyArray<SlotLike>,
   timezone: string,
@@ -460,7 +481,9 @@ export const redactPhoneNumber = (value: string): string => {
 
 export const redactPersonData = (value: string): string => {
   const { text, tokens } = shieldTemporalValues(value);
-  const redacted = redactPhoneNumber(text).replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]');
+  const redacted = redactPhoneNumber(text)
+    .replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]');
   return restoreDates(redacted, tokens);
 };
 

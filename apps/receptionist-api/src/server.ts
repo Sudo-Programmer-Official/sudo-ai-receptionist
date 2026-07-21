@@ -2,10 +2,9 @@ import http from 'node:http';
 import { createAgent } from '@sudo-ai-receptionist/agent-core';
 import { MockBusinessAdapter } from '@sudo-ai-receptionist/mock-business';
 import { SalonFlowAdapter } from '@sudo-ai-receptionist/salonflow';
-import { createCorrelationId, loadRuntimeConfig, redactPersonData, sanitizeErrorMessage } from '@sudo-ai-receptionist/shared';
-import { validateConversationState } from '@sudo-ai-receptionist/conversation-state';
+import { createCorrelationId, loadRuntimeConfig, sanitizeErrorMessage } from '@sudo-ai-receptionist/shared';
+import { createConversationState, validateConversationState } from '@sudo-ai-receptionist/conversation-state';
 import { buildRealtimeInstructions, createSessionPayload, type RealtimeBusinessContext } from '@sudo-ai-receptionist/realtime-runtime';
-import { createConversationState } from '@sudo-ai-receptionist/conversation-state';
 import { createStructuredLogger } from '@sudo-ai-receptionist/observability';
 import { buildCorsHeaders, buildPublicCorsHeaders, parseAllowedOrigins } from './cors.js';
 import { BusinessIdMismatchError, ServerMisconfiguredError, resolveBusinessId, resolveChatText } from './business.js';
@@ -30,6 +29,7 @@ const realtimeSessions = new Map<string, {
   expiresAt: number;
   used: boolean;
 }>();
+const conversationStates = new Map<string, ReturnType<typeof createConversationState>>();
 const logger = createStructuredLogger('receptionist-api');
 const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
 const env = {
@@ -187,23 +187,40 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/chat' && req.method === 'POST') {
-    const payload = await readJson(req) as { text?: string; message?: string; state?: unknown; businessId?: string; interrupted?: boolean };
+    const payload = await readJson(req) as {
+      text?: string;
+      message?: string;
+      conversationId?: string;
+      state?: unknown;
+      businessId?: string;
+      interrupted?: boolean;
+      channel?: 'web' | 'voice' | 'sms' | 'phone';
+    };
     try {
       const businessId = resolveBusinessId({
         businessAdapter: env.BUSINESS_ADAPTER,
         configuredBusinessId: env.BUSINESS_ID,
         requestedBusinessId: payload.businessId,
       });
+      const conversationId = payload.conversationId?.trim() || correlationId;
+      const cachedState = conversationStates.get(conversationId);
+      const validatedState = payload.state !== undefined ? validateConversationState(payload.state) : undefined;
+      const state = validatedState ?? cachedState ?? createConversationState({
+        conversationId,
+        businessId,
+        channel: payload.channel ?? (payload.conversationId ? 'voice' : 'web'),
+      });
       const agentInput = {
         text: resolveChatText(payload),
-        ...(payload.state !== undefined ? { state: validateConversationState(payload.state) } : {}),
+        state,
         businessId,
         correlationId,
-        channel: 'web' as const,
+        channel: state.channel,
         ...(payload.interrupted !== undefined ? { interrupted: payload.interrupted } : {})
       };
       const result = await agent.handleTurn(agentInput);
-      res.writeHead(200).end(JSON.stringify({ ...result, message: redactPersonData(result.message) }));
+      conversationStates.set(result.state.conversationId, result.state);
+      res.writeHead(200).end(JSON.stringify(result));
     } catch (error) {
       if (error instanceof BusinessIdMismatchError) {
         writeBusinessIdMismatch(res, error);

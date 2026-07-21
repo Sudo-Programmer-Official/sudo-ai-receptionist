@@ -32,5 +32,8 @@ describe('loadRuntimeConfig', () => {
     expect(redactPhoneNumber('555-123-4567')).toBe('[redacted-phone]');
     expect(redactPersonData('+1 555 123 4567')).toBe('[redacted-phone]');
     expect(redactPhoneNumber('(555) 123-4567')).toBe('[redacted-phone]');
+    expect(redactPersonData('Abhi Lee can be reached at abhi@example.com or 555-123-4567')).toBe(
+      '[redacted-name] can be reached at [redacted-email] or [redacted-phone]',
+    );
   });
 });

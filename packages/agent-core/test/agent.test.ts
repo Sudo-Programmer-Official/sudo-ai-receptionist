@@ -218,9 +218,12 @@ describe('ReceptionistAgent', () => {
       channel: 'voice',
       state: thirdTurn.state,
     });
-    expect(fourthTurn.message).toContain('Just to confirm');
-    expect(fourthTurn.message).toContain('11:00 AM');
+    expect(fourthTurn.message).toBe(
+      'Just to confirm: Haircut tomorrow at 11:00 AM with Stylist 1, for Alex Johnson. I’ll use the phone number ending in 4242. Should I book it?',
+    );
     expect(fourthTurn.message).not.toContain('2026-07-21T16:00:00.000Z');
+    expect(fourthTurn.message).not.toContain('[redacted-name]');
+    expect(fourthTurn.message).not.toContain('[redacted-phone]');
 
     const finalTurn = await agent.handleTurn({
       text: 'yes',
@@ -229,8 +232,7 @@ describe('ReceptionistAgent', () => {
       state: { ...fourthTurn.state, callerTimezone: 'America/New_York' },
     });
 
-    expect(finalTurn.message).toContain('Booked.');
-    expect(finalTurn.message).toContain('your time');
+    expect(finalTurn.message).toBe('Booked. Haircut is confirmed for Test Customer tomorrow at 11:00 AM with Stylist 1.');
     expect(bookingInputs).toHaveLength(1);
     expect(bookingInputs[0]).toMatchObject({
       slotId: 'slot-1',
@@ -300,6 +302,46 @@ describe('ReceptionistAgent', () => {
 
     expect(thirdTurn.state.customerName).toBe('Abhi');
     expect(thirdTurn.message).toBe('Thanks, Abhi. What phone number should I use?');
+  });
+
+  it('normalizes spoken phone numbers before validation', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'Abhi',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    const fourthTurn = await agent.handleTurn({
+      text: 'three six one four four two nine three seven six',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: thirdTurn.state,
+    });
+
+    expect(fourthTurn.state.customerPhone).toBe('3614429376');
+    expect(fourthTurn.message).toBe(
+      'Just to confirm: Haircut tomorrow at 11:00 AM with Stylist 1, for Abhi. I’ll use the phone number ending in 9376. Should I book it?',
+    );
   });
 
   it.each([

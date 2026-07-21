@@ -102,13 +102,13 @@ describe('createApiClient', () => {
       callId: 'call_1',
       answerSdp: 'v=0',
     });
-    await expect(client.sendChat({ text: 'hello' })).resolves.toMatchObject({
+    await expect(client.sendChat({ message: 'hello' })).resolves.toMatchObject({
       message: 'Booked',
       state: { requestedService: 'Haircut' },
     });
   });
 
-  test('includes businessId in chat requests when provided', async () => {
+  test('sends message and conversationId in chat requests when provided', async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({
         message: 'ok',
@@ -124,8 +124,8 @@ describe('createApiClient', () => {
     });
 
     await client.sendChat({
-      text: 'hello',
-      businessId: '754decf4-4db3-4bfc-be6c-1a9733eea42c',
+      message: 'hello',
+      conversationId: 'conv-123',
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -134,8 +134,8 @@ describe('createApiClient', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          text: 'hello',
-          businessId: '754decf4-4db3-4bfc-be6c-1a9733eea42c',
+          message: 'hello',
+          conversationId: 'conv-123',
         }),
       }),
     );

@@ -101,8 +101,8 @@ export const createApiClient = (config: ApiClientConfig): ApiClient => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        text: input.text,
-        ...(input.businessId ? { businessId: input.businessId } : {}),
+        message: input.message,
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
         ...(input.state ? { state: input.state } : {}),
         ...(input.interrupted !== undefined ? { interrupted: input.interrupted } : {}),
       }),

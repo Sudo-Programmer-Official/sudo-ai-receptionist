@@ -11,9 +11,10 @@ import {
 } from '@sudo-ai-receptionist/conversation-state';
 import {
   createCorrelationId,
+  formatCustomerConfirmationMessage,
+  formatCustomerSuccessMessage,
   formatSlotForCustomer,
   formatSlotOptions,
-  formatTimeZoneLabel,
   normalizeAppointmentIntent,
   selectSlotFromUtterance,
 } from '@sudo-ai-receptionist/shared';
@@ -50,6 +51,20 @@ type SelectableSlot = {
 
 const asSelectableSlots = (slots: ReadonlyArray<SelectableSlot>): ReadonlyArray<SelectableSlot> => slots;
 
+const SPELLED_DIGIT_MAP: Record<string, string> = {
+  zero: '0',
+  oh: '0',
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+};
+
 const formatSelectionPrompt = (slots: ReadonlyArray<{ startsAt: string }>, timezone: string): string => {
   const labels = slots.slice(0, 3).map((slot) => formatSlotForCustomer(slot.startsAt, timezone).spokenLabel);
   if (labels.length === 0) {
@@ -62,25 +77,6 @@ const formatSelectionPrompt = (slots: ReadonlyArray<{ startsAt: string }>, timez
     return `Please choose one of the available times first: ${labels[0]} and ${labels[1]}.`;
   }
   return `Please choose one of the available times first: ${labels[0]}, ${labels[1]}, and ${labels[2]}.`;
-};
-
-const formatSlotForConfirmation = (
-  slot: { startsAt: string; staffName?: string | undefined },
-  businessTimezone: string,
-  callerTimezone?: string,
-): string => {
-  const businessSlot = formatSlotForCustomer(slot.startsAt, businessTimezone);
-  const businessLabel = `${businessSlot.spokenDate} at ${businessSlot.spokenLabel} ${formatTimeZoneLabel(businessTimezone)}`;
-  if (!callerTimezone || callerTimezone.trim() === businessTimezone.trim()) {
-    return businessLabel;
-  }
-  const callerSlot = formatSlotForCustomer(slot.startsAt, callerTimezone);
-  return `${businessLabel} — ${callerSlot.spokenLabel} your time`;
-};
-
-const describeSlotForSpeech = (slot: { startsAt: string }, timezone: string): string => {
-  const presentation = formatSlotForCustomer(slot.startsAt, timezone);
-  return `${presentation.spokenDate} at ${presentation.spokenLabel}`;
 };
 
 const logEmptyAvailabilityDiagnostics = async (input: {
@@ -138,8 +134,24 @@ const findService = (services: ServiceOffering[], text: string): ServiceOffering
 };
 
 const extractPhone = (text: string): string | undefined => {
-  const match = text.match(/(\+?\d[\d\s().-]{6,}\d)/);
-  return match?.[1]?.replace(/\s+/g, ' ').trim();
+  const explicitMatch = text.match(/(\+?\d[\d\s().-]{6,}\d)/);
+  if (explicitMatch?.[1]) {
+    const digits = explicitMatch[1].replace(/\D/g, '');
+    return digits.length >= 10 ? digits : undefined;
+  }
+
+  const tokens = [...text.toLowerCase().matchAll(/\b(?:zero|oh|one|two|three|four|five|six|seven|eight|nine|\d)\b/g)];
+  const digits = tokens
+    .map((match) => {
+      const token = match[0];
+      if (/^\d$/.test(token)) {
+        return token;
+      }
+      return SPELLED_DIGIT_MAP[token] ?? '';
+    })
+    .join('');
+
+  return digits.length >= 10 ? digits : undefined;
 };
 
 const extractName = (text: string): string | undefined => {
@@ -416,8 +428,18 @@ export class ReceptionistAgent {
           requiresUserAction: true
         };
       }
+      const slotPresentation = formatSlotForCustomer(slot.startsAt, businessTimezone, new Date());
+      const customerName = nextState.customerName ?? 'the customer';
+      const customerPhone = nextState.customerPhone ?? '';
       return {
-        message: `Just to confirm: ${nextState.requestedService ?? 'the service'} on ${formatSlotForConfirmation(slot, businessTimezone, nextState.callerTimezone)} with ${slot.staffName ?? 'your stylist'}, for ${nextState.customerName} at ${nextState.customerPhone}. Should I book it?`,
+        message: formatCustomerConfirmationMessage({
+          serviceName: nextState.requestedService ?? 'the service',
+          customerName,
+          customerPhone,
+          staffName: slot.staffName ?? 'your stylist',
+          localDateLabel: slotPresentation.spokenDate,
+          localTimeLabel: slotPresentation.spokenLabel,
+        }),
         state: nextState,
         toolStatus,
         requiresUserAction: true
@@ -469,8 +491,16 @@ export class ReceptionistAgent {
         bookingConfirmationStatus: 'confirmed',
         selectedSlot
       });
+      const slotPresentation = formatSlotForCustomer(selectedSlot.startsAt, businessTimezone, new Date());
       return {
-        message: `Booked. ${nextState.requestedService ?? 'The service'} is confirmed for ${customer.fullName} at ${formatSlotForConfirmation(selectedSlot, businessTimezone, nextState.callerTimezone)}.`,
+        message: formatCustomerSuccessMessage({
+          serviceName: nextState.requestedService ?? 'The service',
+          customerName: customer.fullName,
+          customerPhone: customer.phoneNumber,
+          staffName: selectedSlot.staffName ?? 'your stylist',
+          localDateLabel: slotPresentation.spokenDate,
+          localTimeLabel: slotPresentation.spokenLabel,
+        }),
         state: nextState,
         toolStatus,
         requiresUserAction: false

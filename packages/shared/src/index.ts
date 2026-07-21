@@ -51,7 +51,9 @@ export const redactPhoneNumber = (value: string): string => {
 
 export const redactPersonData = (value: string): string => {
   const { text, tokens } = shieldTemporalValues(value);
-  const redacted = redactPhoneNumber(text).replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]');
+  const redacted = redactPhoneNumber(text)
+    .replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]');
   return restoreDates(redacted, tokens);
 };
 

@@ -31,6 +31,7 @@ type RealtimeVoiceEvents = {
 
 const DEFAULT_MODEL = 'gpt-realtime-2.1';
 const DEFAULT_VOICE = 'alloy';
+const RENDERER_INSTRUCTIONS = 'You are the voice renderer for an AI receptionist. Speak the supplied response naturally and exactly. Do not make booking decisions, call tools, ask additional questions, or change appointment details.';
 
 const safeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
@@ -89,6 +90,11 @@ const initialDiagnostics = (): RealtimeDiagnostics => ({
   remoteAudioReceived: false,
   lastEventType: 'none',
   lastErrorMessage: 'none',
+  finalTranscriptCount: 0,
+  duplicateTranscriptEventsIgnored: 0,
+  interruptionCount: 0,
+  lastSpeechEndToAudioStartMs: null,
+  lastChatRequestState: 'none',
 });
 
 const summarizeTrack = (track: MediaStreamTrack | null | undefined, sender: RTCRtpSender | null): string => {
@@ -100,17 +106,17 @@ const summarizeTrack = (track: MediaStreamTrack | null | undefined, sender: RTCR
   return `kind=${track.kind}; enabled=${track.enabled}; ready=${track.readyState}; sender=${senderState}`;
 };
 
-const createSessionUpdatePayload = (session: RealtimeSessionResponse): Record<string, unknown> => ({
+const createSessionUpdatePayload = (_session: RealtimeSessionResponse): Record<string, unknown> => ({
   type: 'session.update',
   session: {
-    instructions: session.instructions ?? '',
+    instructions: RENDERER_INSTRUCTIONS,
     voice: DEFAULT_VOICE,
     modalities: ['audio'],
     tools: [],
     tool_choice: 'none',
     turn_detection: {
       type: 'server_vad',
-      create_response: true,
+      create_response: false,
       interrupt_response: true,
       prefix_padding_ms: 300,
       silence_duration_ms: 350,
@@ -125,13 +131,15 @@ const createSessionUpdatePayload = (session: RealtimeSessionResponse): Record<st
 
 const createChatRequest = (
   session: RealtimeSessionResponse | null,
-  text: string,
   state: ConversationStateSnapshot | null,
-): { text: string; businessId?: string; state?: ConversationStateSnapshot } => ({
-  text,
-  ...(session?.businessId ? { businessId: session.businessId } : {}),
-  ...(state ? { state } : {}),
-});
+  text: string,
+): { message: string; conversationId?: string } => {
+  const conversationId = session?.conversationId ?? state?.conversationId;
+  return {
+    message: text,
+    ...(conversationId ? { conversationId } : {}),
+  };
+};
 
 export class RealtimeVoiceController {
   private pc: RTCPeerConnection | null = null;
@@ -142,8 +150,12 @@ export class RealtimeVoiceController {
   private session: RealtimeSessionResponse | null = null;
   private conversationState: ConversationStateSnapshot | null = null;
   private processedTranscripts = new Set<string>();
+  private finalTranscriptCount = 0;
+  private duplicateTranscriptEventsIgnored = 0;
+  private interruptionCount = 0;
   private pendingAudioStartAt: number | null = null;
   private lastSpeechEndAt: number | null = null;
+  private lastSpeechEndToAudioStartMs: number | null = null;
   private assistantSpeaking = false;
   private activeRequestId = 0;
   private destroyed = false;
@@ -244,6 +256,11 @@ export class RealtimeVoiceController {
       localAudioTrackState: 'none',
       remoteAudioReceived: false,
       lastErrorMessage: 'none',
+      lastSpeechEndToAudioStartMs: null,
+      finalTranscriptCount: this.finalTranscriptCount,
+      duplicateTranscriptEventsIgnored: this.duplicateTranscriptEventsIgnored,
+      interruptionCount: this.interruptionCount,
+      lastChatRequestState: this.connectionState,
     });
     this.events.onConnectionStateChange('idle');
     this.events.onMicStateChange('off');
@@ -253,10 +270,18 @@ export class RealtimeVoiceController {
   }
 
   async interrupt(): Promise<void> {
+    this.interruptionCount += 1;
     this.pendingAudioStartAt = null;
     this.assistantSpeaking = false;
     this.audioElement.pause();
     this.audioElement.currentTime = 0;
+    console.info(JSON.stringify({
+      scope: 'receptionist-web',
+      event: 'assistant_interrupted',
+      interruptionCount: this.interruptionCount,
+    }));
+    this.events.onStateChange('interrupted');
+    this.updateDiagnostics();
     this.events.onStateChange('listening');
     this.sendEvent({ type: 'response.cancel' });
     this.sendEvent({ type: 'output_audio_buffer.clear' });
@@ -285,8 +310,12 @@ export class RealtimeVoiceController {
     this.session = session;
     this.conversationState = resolvedState;
     this.processedTranscripts.clear();
+    this.finalTranscriptCount = 0;
+    this.duplicateTranscriptEventsIgnored = 0;
+    this.interruptionCount = 0;
     this.pendingAudioStartAt = null;
     this.lastSpeechEndAt = null;
+    this.lastSpeechEndToAudioStartMs = null;
     this.assistantSpeaking = false;
     this.peerConnectionOpen = false;
     this.dataChannelOpen = false;
@@ -351,9 +380,9 @@ export class RealtimeVoiceController {
 
     this.sendEvent(createSessionUpdatePayload(session));
     this.events.onStateChange('listening');
-    this.pendingAudioStartAt = performance.now();
     this.assistantSpeaking = false;
-    this.sendEvent({ type: 'response.create' });
+    this.pendingAudioStartAt = null;
+    this.updateDiagnostics();
 
     return session;
   }
@@ -645,7 +674,7 @@ export class RealtimeVoiceController {
           type === 'session.updated' ? 'session updated' : undefined,
         ]));
         return;
-      case 'input_audio_buffer.speech_started':
+    case 'input_audio_buffer.speech_started':
         this.lastSpeechEndAt = null;
         if (this.assistantSpeaking) {
           await this.interrupt();
@@ -658,13 +687,32 @@ export class RealtimeVoiceController {
       case 'conversation.item.input_audio_transcription.completed': {
         const transcript = safeText(event.transcript);
         const dedupeKey = getTranscriptEventDeduplicationKey(event);
-        if (!transcript || (dedupeKey && this.processedTranscripts.has(dedupeKey))) {
+        if (!transcript) {
+          return;
+        }
+        this.finalTranscriptCount += 1;
+        this.updateDiagnostics();
+        if (dedupeKey && this.processedTranscripts.has(dedupeKey)) {
+          this.duplicateTranscriptEventsIgnored += 1;
+          this.updateDiagnostics();
+          console.info(JSON.stringify({
+            scope: 'receptionist-web',
+            event: 'duplicate_transcript_ignored',
+            duplicateCount: this.duplicateTranscriptEventsIgnored,
+          }));
           return;
         }
         if (dedupeKey) {
           this.processedTranscripts.add(dedupeKey);
         }
+        this.events.onStateChange('transcribing');
         this.lastSpeechEndAt = performance.now();
+        console.info(JSON.stringify({
+          scope: 'receptionist-web',
+          event: 'final_transcription_received',
+          transcriptLength: transcript.length,
+          duplicateIgnored: false,
+        }));
         await this.handleTranscript(transcript);
         return;
       }
@@ -673,10 +721,17 @@ export class RealtimeVoiceController {
         if (!this.assistantSpeaking && this.pendingAudioStartAt !== null && this.lastSpeechEndAt !== null) {
           this.assistantSpeaking = true;
           this.events.onStateChange('speaking');
+          this.lastSpeechEndToAudioStartMs = Math.max(0, Math.round(performance.now() - this.lastSpeechEndAt));
+          console.info(JSON.stringify({
+            scope: 'receptionist-web',
+            event: 'assistant_audio_started',
+            speechEndToAudioStartMs: this.lastSpeechEndToAudioStartMs,
+          }));
           this.events.onMetric({
             name: 'user speech end to AI audio start',
-            valueMs: Math.max(0, Math.round(performance.now() - this.lastSpeechEndAt)),
+            valueMs: this.lastSpeechEndToAudioStartMs,
           });
+          this.updateDiagnostics();
         }
         return;
       case 'response.audio.done':
@@ -685,6 +740,11 @@ export class RealtimeVoiceController {
         this.assistantSpeaking = false;
         this.pendingAudioStartAt = null;
         this.events.onStateChange('listening');
+        this.updateDiagnostics();
+        console.info(JSON.stringify({
+          scope: 'receptionist-web',
+          event: 'assistant_audio_completed',
+        }));
         return;
       case 'error':
         this.setConnectionFailure(safeText((event as { error?: { message?: string } }).error?.message) || 'Realtime error');
@@ -700,18 +760,40 @@ export class RealtimeVoiceController {
     }
     this.events.onTranscript('user', transcript);
     this.events.onStateChange('thinking');
+    console.info(JSON.stringify({
+      scope: 'receptionist-web',
+      event: 'chat_request_started',
+      hasConversationId: Boolean(this.session?.conversationId || this.conversationState?.conversationId),
+    }));
+    this.updateDiagnostics({
+      finalTranscriptCount: this.finalTranscriptCount,
+      duplicateTranscriptEventsIgnored: this.duplicateTranscriptEventsIgnored,
+      interruptionCount: this.interruptionCount,
+      lastChatRequestState: 'thinking',
+    });
 
     const requestStartedAt = performance.now();
     const requestId = ++this.activeRequestId;
     try {
       const response = await this.api.sendChat({
-        ...createChatRequest(this.session, transcript, this.conversationState),
+        ...createChatRequest(this.session, this.conversationState, transcript),
       });
 
       if (requestId !== this.activeRequestId || this.destroyed) {
         return;
       }
 
+      console.info(JSON.stringify({
+        scope: 'receptionist-web',
+        event: 'chat_request_completed',
+        messageLength: response.message.length,
+      }));
+      this.updateDiagnostics({
+        finalTranscriptCount: this.finalTranscriptCount,
+        duplicateTranscriptEventsIgnored: this.duplicateTranscriptEventsIgnored,
+        interruptionCount: this.interruptionCount,
+        lastChatRequestState: 'completed',
+      });
       if (response.state) {
         this.conversationState = response.state;
         this.events.onConversationState(response.state);
@@ -735,6 +817,11 @@ export class RealtimeVoiceController {
       const nextVoiceState = inferVoiceState(response, response.requiresUserAction ? 'listening' : 'speaking');
       this.events.onStateChange(nextVoiceState);
       this.events.onTranscript('assistant', response.message);
+      console.info(JSON.stringify({
+        scope: 'receptionist-web',
+        event: 'assistant_speech_requested',
+        messageLength: response.message.length,
+      }));
       await this.speak(response.message);
     } catch (error) {
       this.setConnectionFailure(error instanceof Error ? error.message : 'The backend request failed.');
@@ -752,7 +839,7 @@ export class RealtimeVoiceController {
     const requestStartedAt = performance.now();
     const requestId = ++this.activeRequestId;
     const response = await this.api.sendChat({
-      ...createChatRequest(this.session, trimmed, this.conversationState),
+      ...createChatRequest(this.session, this.conversationState, trimmed),
     });
 
     if (requestId !== this.activeRequestId || this.destroyed) {
@@ -782,6 +869,11 @@ export class RealtimeVoiceController {
     const nextVoiceState = inferVoiceState(response, response.requiresUserAction ? 'listening' : 'speaking');
     this.events.onStateChange(nextVoiceState);
     this.events.onTranscript('assistant', response.message);
+    console.info(JSON.stringify({
+      scope: 'receptionist-web',
+      event: 'assistant_speech_requested',
+      messageLength: response.message.length,
+    }));
     await this.speak(response.message);
     return response;
   }
@@ -792,6 +884,7 @@ export class RealtimeVoiceController {
     }
     this.pendingAudioStartAt = performance.now();
     this.assistantSpeaking = false;
+    this.updateDiagnostics();
     this.sendEvent({
       type: 'conversation.item.create',
       item: {

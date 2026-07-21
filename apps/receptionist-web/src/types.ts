@@ -15,7 +15,9 @@ export type VoiceState =
   | 'idle'
   | 'connecting'
   | 'listening'
+  | 'transcribing'
   | 'speaking'
+  | 'interrupted'
   | 'thinking'
   | 'checking_availability'
   | 'offering_slots'
@@ -56,6 +58,11 @@ export type RealtimeDiagnostics = {
   remoteAudioReceived: boolean;
   lastEventType: string;
   lastErrorMessage: string;
+  finalTranscriptCount?: number;
+  duplicateTranscriptEventsIgnored?: number;
+  interruptionCount?: number;
+  lastSpeechEndToAudioStartMs?: number | null;
+  lastChatRequestState?: string;
 };
 
 export type BookingSlot = {
@@ -102,8 +109,8 @@ export type ConversationStateSnapshot = {
 };
 
 export type ChatRequest = {
-  text: string;
-  businessId?: string;
+  message: string;
+  conversationId?: string;
   state?: ConversationStateSnapshot;
   interrupted?: boolean;
 };

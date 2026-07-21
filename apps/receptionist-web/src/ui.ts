@@ -70,6 +70,7 @@ const stages: StageMeta[] = [
   { state: 'idle', label: 'Idle', hint: 'Waiting for you to connect the voice session.' },
   { state: 'connecting', label: 'Connecting', hint: 'Creating an ephemeral realtime session.' },
   { state: 'listening', label: 'Listening', hint: 'Microphone is live and the assistant is waiting.' },
+  { state: 'transcribing', label: 'Transcribing', hint: 'The final user transcript is being assembled.' },
   { state: 'thinking', label: 'Thinking', hint: 'The backend is validating the last transcript.' },
   { state: 'checking_availability', label: 'Checking availability', hint: 'SalonFlow is being queried for open times.' },
   { state: 'offering_slots', label: 'Offering slots', hint: 'The assistant is reading out the top matches.' },
@@ -77,6 +78,7 @@ const stages: StageMeta[] = [
   { state: 'confirming', label: 'Confirming', hint: 'Explicit booking approval is required now.' },
   { state: 'booking', label: 'Booking', hint: 'The appointment write is in progress.' },
   { state: 'booked', label: 'Booked', hint: 'A single appointment has been created.' },
+  { state: 'interrupted', label: 'Interrupted', hint: 'The assistant audio was cut off immediately.' },
   { state: 'speaking', label: 'Speaking', hint: 'OpenAI Realtime is playing back the assistant voice.' },
   { state: 'error', label: 'Error', hint: 'The voice connection or backend request failed.' },
 ];
@@ -394,7 +396,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
             ? 'fail'
             : voiceState === 'booked'
               ? 'active'
-              : voiceState === 'connecting' || voiceState === 'thinking'
+              : voiceState === 'connecting' || voiceState === 'thinking' || voiceState === 'interrupted'
                 ? 'warn'
                 : 'active',
         );
@@ -405,7 +407,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
             ? 'fail'
             : voiceState === 'booked'
               ? 'live'
-              : voiceState === 'connecting' || voiceState === 'thinking'
+              : voiceState === 'connecting' || voiceState === 'thinking' || voiceState === 'interrupted'
                 ? 'warn'
                 : state.connectionState === 'data_channel_open' || state.connectionState === 'webrtc_connected'
                   ? 'live'
@@ -518,6 +520,10 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           ['Remote audio', diagnostics.remoteAudioReceived],
           ['Last event', diagnostics.lastEventType],
           ['Last error', diagnostics.lastErrorMessage],
+          ['Final transcripts', diagnostics.finalTranscriptCount ?? 0],
+          ['Duplicates ignored', diagnostics.duplicateTranscriptEventsIgnored ?? 0],
+          ['Interruptions', diagnostics.interruptionCount ?? 0],
+          ['Speech→audio latency', diagnostics.lastSpeechEndToAudioStartMs ?? 'n/a'],
         ];
         for (const [label, value] of rows) {
           const row = document.createElement('div');
@@ -606,21 +612,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     updateConnectButton();
     renderStages();
     try {
-      const initialConversation: ConversationStateSnapshot | undefined = (() => {
-        if (state.conversation) {
-          const nextConversation: ConversationStateSnapshot = { ...state.conversation };
-          const callerTimezone = state.conversation.callerTimezone ?? browserTimeZone;
-          if (callerTimezone) {
-            nextConversation.callerTimezone = callerTimezone;
-          }
-          return nextConversation;
-        }
-        if (browserTimeZone) {
-          return { callerTimezone: browserTimeZone };
-        }
-        return undefined;
-      })();
-      const session = await controller.connect(initialConversation);
+      const session = await controller.connect(state.conversation ?? undefined);
       state.session = session;
       dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
       updateConnectButton();
