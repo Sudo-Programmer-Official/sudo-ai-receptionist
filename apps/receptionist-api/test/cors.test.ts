@@ -8,6 +8,12 @@ describe('cors policy', () => {
     expect(isAllowedOrigin('https://sudo-ai-receptionist-receptionist-gsjjfepmk.vercel.app', allowedOrigins)).toBe(true);
   });
 
+  test('allows other deployed Vercel origins for the receptionist frontend project', () => {
+    const allowedOrigins = parseAllowedOrigins(undefined);
+
+    expect(isAllowedOrigin('https://sudo-ai-receptionist-receptionist-w.vercel.app', allowedOrigins)).toBe(true);
+  });
+
   test('allows configured Vercel and localhost origins', () => {
     const allowedOrigins = parseAllowedOrigins('https://app.example.com');
     const cors = buildCorsHeaders('https://app.example.com', allowedOrigins);

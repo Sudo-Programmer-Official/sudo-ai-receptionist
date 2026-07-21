@@ -1,4 +1,5 @@
 const DEFAULT_PRODUCTION_ORIGINS = ['https://sudo-ai-receptionist-receptionist-gsjjfepmk.vercel.app'];
+const VERCEL_PROJECT_PREFIX = 'sudo-ai-receptionist-receptionist-';
 
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -37,6 +38,15 @@ const isLocalhostOrigin = (origin: string): boolean => {
   }
 };
 
+const isProjectVercelOrigin = (origin: string): boolean => {
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' && url.hostname.startsWith(VERCEL_PROJECT_PREFIX) && url.hostname.endsWith('.vercel.app');
+  } catch {
+    return false;
+  }
+};
+
 export const isAllowedOrigin = (origin: string | undefined, allowedOrigins: string[]): boolean => {
   if (!origin) {
     return false;
@@ -46,6 +56,9 @@ export const isAllowedOrigin = (origin: string | undefined, allowedOrigins: stri
     return false;
   }
   if (isLocalhostOrigin(normalized)) {
+    return true;
+  }
+  if (isProjectVercelOrigin(normalized)) {
     return true;
   }
   return allowedOrigins.includes(normalized);
