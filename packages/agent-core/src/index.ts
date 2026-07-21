@@ -144,7 +144,31 @@ const extractPhone = (text: string): string | undefined => {
 
 const extractName = (text: string): string | undefined => {
   const match = text.match(/(?:i'?m|my name is|this is)\s+([a-z]+(?:\s+[a-z]+){0,2})/i);
-  return match?.[1]?.trim();
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+
+  const bareName = text
+    .trim()
+    .replace(/[.!?]+$/, '')
+    .replace(/\s+/g, ' ');
+  if (!bareName) {
+    return undefined;
+  }
+
+  if (/^(yes|no|ok|okay|confirm|book it|please|thanks|thank you)$/i.test(bareName)) {
+    return undefined;
+  }
+  if (/\b(first|second|third|earliest|latest|option one|option two|option three)\b/i.test(bareName)) {
+    return undefined;
+  }
+  if (/\d/.test(bareName) || /[:@]/.test(bareName)) {
+    return undefined;
+  }
+  if (!/^[a-z]+(?:\s+[a-z]+){0,2}$/i.test(bareName)) {
+    return undefined;
+  }
+  return bareName;
 };
 
 const wantsConfirmation = (text: string): boolean => /\b(yes|confirm|sounds good|book it|please do it)\b/i.test(text);

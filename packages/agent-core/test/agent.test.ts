@@ -239,6 +239,37 @@ describe('ReceptionistAgent', () => {
     });
   });
 
+  it('accepts a bare customer name instead of repeating the prompt', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'Abhi',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    expect(thirdTurn.state.customerName).toBe('Abhi');
+    expect(thirdTurn.message).toBe('What is the best phone number for confirmation?');
+  });
+
   it('does not throw on invalid dates and asks for clarification', async () => {
     const { adapter, availabilityInputs } = createTestAdapter();
     const agent = createAgent(adapter);
