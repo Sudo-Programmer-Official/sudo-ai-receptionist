@@ -1,4 +1,5 @@
 import type { AvailabilitySlot, BusinessProfile, BookingRecord, ServiceOffering } from '@sudo-ai-receptionist/business-contracts';
+import { isSupportedTimeZone } from '@sudo-ai-receptionist/shared';
 
 export type ConversationChannel = 'web' | 'voice' | 'sms' | 'phone';
 export type BookingConfirmationStatus = 'unconfirmed' | 'pending' | 'confirmed' | 'declined' | 'failed';
@@ -7,6 +8,8 @@ export interface ConversationState {
   conversationId: string;
   businessId: string;
   channel: ConversationChannel;
+  timezone?: string | undefined;
+  callerTimezone?: string | undefined;
   requestedService?: string | undefined;
   serviceId?: string | undefined;
   preferredDate?: string | undefined;
@@ -58,6 +61,18 @@ export const validateConversationState = (value: unknown): ConversationState => 
     proposedSlots: state.proposedSlots as AvailabilitySlot[],
     bookingConfirmationStatus: state.bookingConfirmationStatus as BookingConfirmationStatus
   };
+  if (state.timezone !== undefined) {
+    if (!isSupportedTimeZone(state.timezone)) {
+      throw new ValidationError('Invalid timezone.');
+    }
+    validated.timezone = state.timezone;
+  }
+  if (state.callerTimezone !== undefined) {
+    if (!isSupportedTimeZone(state.callerTimezone)) {
+      throw new ValidationError('Invalid callerTimezone.');
+    }
+    validated.callerTimezone = state.callerTimezone;
+  }
   if (state.requestedService !== undefined) validated.requestedService = state.requestedService;
   if (state.serviceId !== undefined) validated.serviceId = state.serviceId;
   if (state.preferredDate !== undefined) validated.preferredDate = state.preferredDate;

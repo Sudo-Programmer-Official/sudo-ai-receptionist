@@ -87,6 +87,8 @@ const parseBusinessProfile = (value: unknown): BusinessProfile => {
     businessId: obj.businessId as string,
     name: obj.name as string,
     timezone: obj.timezone as string,
+    locale: optionalString(obj.locale),
+    currency: optionalString(obj.currency),
     phone: optionalString(obj.phone),
     website: optionalString(obj.website),
     policies: (policies as unknown[]).map((item: unknown) => {

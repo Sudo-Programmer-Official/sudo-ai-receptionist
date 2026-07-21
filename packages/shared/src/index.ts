@@ -15,9 +15,11 @@ export const createCorrelationId = (): string =>
   `corr_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 
 const ISO_DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/g;
+const ISO_TIMESTAMP_PATTERN = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})\b/g;
 const DISPLAY_DATE_PATTERN = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*)?\d{4}\b/gi;
+const DISPLAY_TIME_PATTERN = /\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/gi;
 
-const shieldDates = (value: string): { text: string; tokens: Array<{ token: string; value: string }> } => {
+const shieldTemporalValues = (value: string): { text: string; tokens: Array<{ token: string; value: string }> } => {
   const tokens: Array<{ token: string; value: string }> = [];
   let nextToken = 0;
 
@@ -30,7 +32,9 @@ const shieldDates = (value: string): { text: string; tokens: Array<{ token: stri
 
   let text = value;
   text = replaceMatches(text, ISO_DATE_PATTERN);
+  text = replaceMatches(text, ISO_TIMESTAMP_PATTERN);
   text = replaceMatches(text, DISPLAY_DATE_PATTERN);
+  text = replaceMatches(text, DISPLAY_TIME_PATTERN);
   return { text, tokens };
 };
 
@@ -38,13 +42,15 @@ const restoreDates = (value: string, tokens: Array<{ token: string; value: strin
   tokens.reduce((text, token) => text.replaceAll(token.token, token.value), value);
 
 export const redactPhoneNumber = (value: string): string => {
-  const { text, tokens } = shieldDates(value);
-  const redacted = text.replace(/\b(\+?\d[\d\s().-]{6,}\d)\b/g, '[redacted-phone]');
+  const { text, tokens } = shieldTemporalValues(value);
+  const redacted = text
+    .replace(/\(\d{3}\)\s*\d{3}[\s.-]?\d{4}/g, '[redacted-phone]')
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, '[redacted-phone]');
   return restoreDates(redacted, tokens);
 };
 
 export const redactPersonData = (value: string): string => {
-  const { text, tokens } = shieldDates(value);
+  const { text, tokens } = shieldTemporalValues(value);
   const redacted = redactPhoneNumber(text).replace(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, '[redacted-name]');
   return restoreDates(redacted, tokens);
 };
@@ -195,3 +201,5 @@ export const validateEnvironment = (
   }
   return output;
 };
+
+export * from './datetime.js';

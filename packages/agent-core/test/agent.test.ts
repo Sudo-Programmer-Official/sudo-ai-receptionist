@@ -1,39 +1,52 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgent } from '../src/index.js';
-import type { BusinessAdapter } from '@sudo-ai-receptionist/business-contracts';
+import type { BusinessAdapter, AvailabilitySlot } from '@sudo-ai-receptionist/business-contracts';
 
-const createTestAdapter = (): {
+const demoBusinessProfile = {
+  businessId: 'demo-salon',
+  name: 'Demo Salon',
+  timezone: 'America/Chicago',
+  phone: '+1 (555) 010-2000',
+  website: 'https://demo.example',
+  policies: [],
+  hours: [],
+};
+
+const services = [
+  { serviceId: 'svc-cut', name: 'Haircut', durationMinutes: 45 },
+  { serviceId: '03d10f69-0e9b-408c-a827-6db63ef29765', name: 'Gel', durationMinutes: 30 },
+];
+
+const makeSlots = (startsAtList: string[]): AvailabilitySlot[] =>
+  startsAtList.map((startsAt, index) => ({
+    slotId: `slot-${index + 1}`,
+    startsAt,
+    endsAt: new Date(new Date(startsAt).getTime() + 30 * 60 * 1000).toISOString(),
+    staffId: `staff-${index + 1}`,
+    staffName: `Stylist ${index + 1}`,
+  }));
+
+const createTestAdapter = (availabilitySlots: AvailabilitySlot[] = makeSlots([
+  '2026-07-21T16:00:00.000Z',
+])): {
   adapter: BusinessAdapter;
   availabilityInputs: Array<Parameters<BusinessAdapter['findAvailability']>[0]>;
+  bookingInputs: Array<Parameters<BusinessAdapter['createBooking']>[0]>;
 } => {
   const availabilityInputs: Array<Parameters<BusinessAdapter['findAvailability']>[0]> = [];
-  const businessProfile = {
-    businessId: 'demo-salon',
-    name: 'Demo Salon',
-    timezone: 'America/Chicago',
-    phone: '+1 (555) 010-2000',
-    website: 'https://demo.example',
-    policies: [],
-    hours: [],
-  };
-  const services = [{ serviceId: 'svc-cut', name: 'Haircut', durationMinutes: 45 }];
+  const bookingInputs: Array<Parameters<BusinessAdapter['createBooking']>[0]> = [];
 
   return {
     availabilityInputs,
+    bookingInputs,
     adapter: {
-      getBusinessProfile: vi.fn(async () => businessProfile),
+      getBusinessProfile: vi.fn(async () => demoBusinessProfile),
       listServices: vi.fn(async () => services),
       listStaff: vi.fn(async () => []),
       findAvailability: vi.fn(async (input) => {
         availabilityInputs.push(input);
         return {
-          slots: [
-            {
-              slotId: `${input.preferredDate}-${input.serviceId}-1`,
-              startsAt: `${input.preferredDate}T11:00:00-05:00`,
-              endsAt: `${input.preferredDate}T12:00:00-05:00`,
-            },
-          ],
+          slots: availabilitySlots,
           source: 'mock',
           expiresAt: '2026-07-21T00:00:00.000Z',
         };
@@ -43,15 +56,18 @@ const createTestAdapter = (): {
         fullName: 'Test Customer',
         phoneNumber: '+1 (555) 010-4242',
       })),
-      createBooking: vi.fn(async () => ({
-        bookingId: 'book_1',
-        customerId: 'cust_1',
-        serviceId: 'svc-cut',
-        slotId: 'slot_1',
-        startsAt: '2026-07-21T11:00:00-05:00',
-        status: 'confirmed',
-        summary: 'Demo Salon',
-      })),
+      createBooking: vi.fn(async (input) => {
+        bookingInputs.push(input);
+        return {
+          bookingId: 'book_1',
+          customerId: input.customerId,
+          serviceId: input.serviceId,
+          slotId: input.slotId,
+          startsAt: input.startsAt,
+          status: 'confirmed',
+          summary: 'Demo Salon',
+        };
+      }),
       sendConfirmation: vi.fn(async () => ({ delivered: true })),
     },
   };
@@ -95,6 +111,134 @@ describe('ReceptionistAgent', () => {
     });
   });
 
+  it('formats three UTC slots as a natural spoken response', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+      '2026-07-21T16:30:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const result = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    expect(result.message).toBe('I found three openings tomorrow: 11:00 AM, 11:15 AM, and 11:30 AM. Which one works best?');
+    expect(result.message).not.toContain('2026-07-21T');
+    expect(result.message).not.toContain('[redacted-phone]');
+  });
+
+  it('maps first one back to the first stored slot', async () => {
+    const { adapter } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'the first one',
+      businessId: 'demo-salon',
+      state: firstTurn.state,
+      channel: 'voice',
+    });
+
+    expect(secondTurn.state.selectedSlot?.slotId).toBe('slot-1');
+    expect(secondTurn.state.selectedSlot?.startsAt).toBe('2026-07-21T16:00:00.000Z');
+  });
+
+  it('preserves the collected date and time until the service is selected', async () => {
+    const { adapter, availabilityInputs } = createTestAdapter();
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    expect(firstTurn.state.preferredDate).toBe('2026-07-21');
+    expect(firstTurn.state.preferredTimeRange).toBe('11am-12pm');
+    expect(firstTurn.message).toContain('service');
+
+    const secondTurn = await agent.handleTurn({
+      text: 'Gel',
+      businessId: 'demo-salon',
+      state: firstTurn.state,
+      channel: 'voice',
+    });
+
+    expect(secondTurn.state.serviceId).toBe('03d10f69-0e9b-408c-a827-6db63ef29765');
+    expect(availabilityInputs).toHaveLength(1);
+    expect(availabilityInputs[0]).toMatchObject({
+      preferredDate: '2026-07-21',
+      preferredTimeRange: '11am-12pm',
+    });
+  });
+
+  it('keeps the exact slot and staff through booking confirmation', async () => {
+    const { adapter, bookingInputs } = createTestAdapter(makeSlots([
+      '2026-07-21T16:00:00.000Z',
+      '2026-07-21T16:15:00.000Z',
+      '2026-07-21T16:30:00.000Z',
+    ]));
+    const agent = createAgent(adapter);
+
+    const firstTurn = await agent.handleTurn({
+      text: 'Haircut tomorrow at 11am',
+      businessId: 'demo-salon',
+      channel: 'voice',
+    });
+
+    const secondTurn = await agent.handleTurn({
+      text: 'first one',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: firstTurn.state,
+    });
+    expect(secondTurn.state.selectedSlot?.slotId).toBe('slot-1');
+
+    const thirdTurn = await agent.handleTurn({
+      text: 'my name is Alex Johnson',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: secondTurn.state,
+    });
+
+    const fourthTurn = await agent.handleTurn({
+      text: '+1 (555) 010-4242',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: thirdTurn.state,
+    });
+    expect(fourthTurn.message).toContain('Just to confirm');
+    expect(fourthTurn.message).toContain('11:00 AM');
+    expect(fourthTurn.message).not.toContain('2026-07-21T16:00:00.000Z');
+
+    const finalTurn = await agent.handleTurn({
+      text: 'yes',
+      businessId: 'demo-salon',
+      channel: 'voice',
+      state: { ...fourthTurn.state, callerTimezone: 'America/New_York' },
+    });
+
+    expect(finalTurn.message).toContain('Booked.');
+    expect(finalTurn.message).toContain('your time');
+    expect(bookingInputs).toHaveLength(1);
+    expect(bookingInputs[0]).toMatchObject({
+      slotId: 'slot-1',
+      startsAt: '2026-07-21T16:00:00.000Z',
+      staffId: 'staff-1',
+    });
+  });
+
   it('does not throw on invalid dates and asks for clarification', async () => {
     const { adapter, availabilityInputs } = createTestAdapter();
     const agent = createAgent(adapter);
@@ -109,52 +253,5 @@ describe('ReceptionistAgent', () => {
     expect(result.state.requestedService).toBe('Haircut');
     expect(result.state.serviceId).toBe('svc-cut');
     expect(availabilityInputs).toHaveLength(0);
-  });
-
-  it('returns the updated empty-availability message with a preserved display date', async () => {
-    const adapter: BusinessAdapter = {
-      getBusinessProfile: vi.fn(async () => ({
-        businessId: 'demo-salon',
-        name: 'Demo Salon',
-        timezone: 'America/Chicago',
-        phone: '+1 (555) 010-2000',
-        website: 'https://demo.example',
-        policies: [],
-        hours: [],
-      })),
-      listServices: vi.fn(async () => [
-        { serviceId: '03d10f69-0e9b-408c-a827-6db63ef29765', name: 'Gel', durationMinutes: 30 },
-      ]),
-      listStaff: vi.fn(async () => []),
-      findAvailability: vi.fn(async () => ({
-        slots: [],
-        source: 'salonflow',
-        expiresAt: '2026-07-21T00:00:00.000Z',
-      })),
-      findOrCreateCustomer: vi.fn(async () => ({
-        customerId: 'cust_1',
-        fullName: 'Test Customer',
-        phoneNumber: '+1 (555) 010-4242',
-      })),
-      createBooking: vi.fn(async () => ({
-        bookingId: 'book_1',
-        customerId: 'cust_1',
-        serviceId: '03d10f69-0e9b-408c-a827-6db63ef29765',
-        slotId: 'slot_1',
-        startsAt: '2026-07-21T11:00:00-05:00',
-        status: 'confirmed',
-        summary: 'Demo Salon',
-      })),
-      sendConfirmation: vi.fn(async () => ({ delivered: true })),
-    };
-    const agent = createAgent(adapter);
-
-    const result = await agent.handleTurn({
-      text: 'Gel tomorrow at 11am',
-      businessId: 'demo-salon',
-      channel: 'voice',
-    });
-
-    expect(result.message).toBe("I couldn’t find an opening for Gel on July 21. Would you like me to check the afternoon or another day?");
   });
 });

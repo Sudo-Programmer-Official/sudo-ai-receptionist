@@ -4,6 +4,8 @@ export interface BusinessProfile {
   businessId: string;
   name: string;
   timezone: string;
+  locale?: string | undefined;
+  currency?: string | undefined;
   phone?: string | undefined;
   website?: string | undefined;
   policies: string[];

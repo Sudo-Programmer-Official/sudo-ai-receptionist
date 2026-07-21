@@ -69,6 +69,8 @@ export type BookingSlot = {
 export type ConversationStateSnapshot = {
   conversationId?: string;
   businessId?: string;
+  timezone?: string;
+  callerTimezone?: string;
   requestedService?: string;
   serviceId?: string;
   preferredDate?: string;
@@ -84,6 +86,8 @@ export type ConversationStateSnapshot = {
     businessId: string;
     name: string;
     timezone: string;
+    locale?: string;
+    currency?: string;
     phone?: string;
     website?: string;
     policies?: string[];

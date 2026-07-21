@@ -14,6 +14,8 @@ const businessProfile: BusinessProfile = {
   businessId: 'demo-salon',
   name: 'Aurora Salon Studio',
   timezone: 'America/Denver',
+  locale: 'en-US',
+  currency: 'USD',
   phone: '+1 (555) 010-2000',
   website: 'https://demo.example',
   policies: ['24 hour cancellation notice', 'Late arrivals may shorten the service'],

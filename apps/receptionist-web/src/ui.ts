@@ -10,6 +10,7 @@ import type {
   VoiceState,
 } from './types';
 import { RealtimeVoiceController } from './realtime';
+import { formatSlotForCustomer, formatTimeZoneLabel, isSupportedTimeZone } from '@sudo-ai-receptionist/shared';
 
 type MountOptions = {
   root: HTMLElement;
@@ -343,8 +344,21 @@ const buildReadinessItems = (state: AppState, dom: AppDom): ReadinessItem[] => [
   { label: 'Assistant audio received', ready: state.diagnostics.remoteAudioReceived },
 ];
 
+const getBrowserTimeZone = (): string | undefined => {
+  try {
+    const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim();
+    if (!resolved || !isSupportedTimeZone(resolved)) {
+      return undefined;
+    }
+    return resolved;
+  } catch {
+    return undefined;
+  }
+};
+
 export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: () => void } => {
   const dom = createDom(root);
+  const browserTimeZone = getBrowserTimeZone();
   const state: AppState = {
     conversation: null,
     session: null,
@@ -442,10 +456,17 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
         dom.serviceValue.textContent = conversation.requestedService ?? 'None yet';
         dom.nameValue.textContent = conversation.customerName ?? 'Pending';
         dom.phoneValue.textContent = conversation.customerPhone ?? 'Pending';
-        dom.slotValue.textContent =
-          conversation.selectedSlot?.startsAt ??
-          conversation.proposedSlots?.[0]?.startsAt ??
-          'No slot selected';
+        const businessTimezone = conversation.businessProfile?.timezone?.trim() || 'America/Chicago';
+        const callerTimezone = conversation.callerTimezone?.trim() || browserTimeZone;
+        const slot = conversation.selectedSlot ?? conversation.proposedSlots?.[0];
+        if (slot) {
+          const businessSlot = formatSlotForCustomer(slot.startsAt, businessTimezone);
+          dom.slotValue.textContent = callerTimezone && callerTimezone !== businessTimezone
+            ? `${businessSlot.spokenDate} at ${businessSlot.spokenLabel} ${formatTimeZoneLabel(businessTimezone)} — ${formatSlotForCustomer(slot.startsAt, callerTimezone).spokenLabel} your time`
+            : `${businessSlot.spokenDate} at ${businessSlot.spokenLabel} ${formatTimeZoneLabel(businessTimezone)}`;
+        } else {
+          dom.slotValue.textContent = 'No slot selected';
+        }
         dom.bookingValue.textContent = conversation.bookingConfirmationStatus || 'Unconfirmed';
 
         if (conversation.bookingConfirmationStatus === 'confirmed') {
@@ -585,7 +606,21 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     updateConnectButton();
     renderStages();
     try {
-      const session = await controller.connect(state.conversation ?? undefined);
+      const initialConversation: ConversationStateSnapshot | undefined = (() => {
+        if (state.conversation) {
+          const nextConversation: ConversationStateSnapshot = { ...state.conversation };
+          const callerTimezone = state.conversation.callerTimezone ?? browserTimeZone;
+          if (callerTimezone) {
+            nextConversation.callerTimezone = callerTimezone;
+          }
+          return nextConversation;
+        }
+        if (browserTimeZone) {
+          return { callerTimezone: browserTimeZone };
+        }
+        return undefined;
+      })();
+      const session = await controller.connect(initialConversation);
       state.session = session;
       dom.sessionSummary.textContent = `Session ${session.conversationId} ready.`;
       updateConnectButton();
@@ -657,6 +692,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
   };
 
   const onLoad = (): void => {
+    console.info(`Receptionist web build ${buildSha.slice(0, 7)}`);
     setChipState(dom.connectionState, 'Disconnected');
     setChipState(dom.micState, 'Mic off');
     setChipState(dom.voiceState, 'Idle');

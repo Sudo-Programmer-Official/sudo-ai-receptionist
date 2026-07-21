@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { loadRuntimeConfig, redactPersonData } from '../src/index';
+import { loadRuntimeConfig, redactPersonData, redactPhoneNumber } from '../src/index';
 
 describe('loadRuntimeConfig', () => {
   test('rejects mock fallback in production', () => {
@@ -25,8 +25,12 @@ describe('loadRuntimeConfig', () => {
 
   test('preserves ISO and display dates while redacting phone numbers', () => {
     expect(redactPersonData('2026-07-21')).toBe('2026-07-21');
+    expect(redactPersonData('2026-07-21T16:00:00.000Z')).toBe('2026-07-21T16:00:00.000Z');
     expect(redactPersonData('July 21, 2026')).toBe('July 21, 2026');
+    expect(redactPersonData('11:00 AM')).toBe('11:00 AM');
     expect(redactPersonData('5551234567')).toBe('[redacted-phone]');
+    expect(redactPhoneNumber('555-123-4567')).toBe('[redacted-phone]');
     expect(redactPersonData('+1 555 123 4567')).toBe('[redacted-phone]');
+    expect(redactPhoneNumber('(555) 123-4567')).toBe('[redacted-phone]');
   });
 });

@@ -1,5 +1,4 @@
 import type {
-  BookingRecord,
   BusinessAdapter,
   BusinessProfile,
   ServiceOffering
@@ -8,10 +7,16 @@ import { performance } from 'node:perf_hooks';
 import {
   applyAssistantUpdate,
   createConversationState,
-  type ConversationState,
-  type BookingConfirmationStatus
+  type ConversationState
 } from '@sudo-ai-receptionist/conversation-state';
-import { createCorrelationId } from '@sudo-ai-receptionist/shared';
+import {
+  createCorrelationId,
+  formatSlotForCustomer,
+  formatSlotOptions,
+  formatTimeZoneLabel,
+  normalizeAppointmentIntent,
+  selectSlotFromUtterance,
+} from '@sudo-ai-receptionist/shared';
 
 export interface AgentTurnInput {
   text: string;
@@ -32,231 +37,50 @@ export interface AgentTurnResult {
 const normalize = (value: string): string => value.trim().toLowerCase();
 
 const BUSINESS_TIME_ZONE_FALLBACK = 'America/Chicago';
+const resolveBusinessTimezone = (state: ConversationState): string =>
+  state.timezone?.trim() || state.businessProfile?.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK;
 
-const MONTHS: Record<string, number> = {
-  january: 1,
-  february: 2,
-  march: 3,
-  april: 4,
-  may: 5,
-  june: 6,
-  july: 7,
-  august: 8,
-  september: 9,
-  october: 10,
-  november: 11,
-  december: 12,
+type SelectableSlot = {
+  slotId: string;
+  startsAt: string;
+  endsAt: string;
+  staffId?: string | undefined;
+  staffName?: string | undefined;
 };
 
-const WEEKDAYS: Record<string, number> = {
-  sunday: 0,
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
+const asSelectableSlots = (slots: ReadonlyArray<SelectableSlot>): ReadonlyArray<SelectableSlot> => slots;
+
+const formatSelectionPrompt = (slots: ReadonlyArray<{ startsAt: string }>, timezone: string): string => {
+  const labels = slots.slice(0, 3).map((slot) => formatSlotForCustomer(slot.startsAt, timezone).spokenLabel);
+  if (labels.length === 0) {
+    return 'Please choose one of the available times first.';
+  }
+  if (labels.length === 1) {
+    return `Please choose one of the available times first: ${labels[0]}.`;
+  }
+  if (labels.length === 2) {
+    return `Please choose one of the available times first: ${labels[0]} and ${labels[1]}.`;
+  }
+  return `Please choose one of the available times first: ${labels[0]}, ${labels[1]}, and ${labels[2]}.`;
 };
 
-type ParsedAvailabilityIntent =
-  | { kind: 'parsed'; preferredDate: string; preferredTimeRange?: string }
-  | { kind: 'invalid' }
-  | { kind: 'missing' };
-
-const getZonedDateParts = (date: Date, timeZone: string): { year: number; month: number; day: number; weekday: number } => {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    weekday: 'long',
-  });
-  const parts = formatter.formatToParts(date);
-  const getPart = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
-  const yearPart = getPart('year');
-  const monthPart = getPart('month');
-  const dayPart = getPart('day');
-  const weekdayPart = getPart('weekday');
-  if (!yearPart || !monthPart || !dayPart || !weekdayPart) {
-    throw new Error(`Failed to read date parts for time zone ${timeZone}`);
+const formatSlotForConfirmation = (
+  slot: { startsAt: string; staffName?: string | undefined },
+  businessTimezone: string,
+  callerTimezone?: string,
+): string => {
+  const businessSlot = formatSlotForCustomer(slot.startsAt, businessTimezone);
+  const businessLabel = `${businessSlot.spokenDate} at ${businessSlot.spokenLabel} ${formatTimeZoneLabel(businessTimezone)}`;
+  if (!callerTimezone || callerTimezone.trim() === businessTimezone.trim()) {
+    return businessLabel;
   }
-  const year = Number.parseInt(yearPart, 10);
-  const month = Number.parseInt(monthPart, 10);
-  const day = Number.parseInt(dayPart, 10);
-  const weekdayName = weekdayPart.toLowerCase();
-  const weekday = WEEKDAYS[weekdayName] ?? 0;
-  return { year, month, day, weekday };
+  const callerSlot = formatSlotForCustomer(slot.startsAt, callerTimezone);
+  return `${businessLabel} — ${callerSlot.spokenLabel} your time`;
 };
 
-const formatDateIso = (year: number, month: number, day: number): string => `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-
-const isValidCalendarDate = (year: number, month: number, day: number): boolean => {
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-};
-
-const addCalendarDays = (isoDate: string, days: number): string => {
-  const parts = isoDate.split('-');
-  if (parts.length !== 3) {
-    throw new Error(`Invalid ISO date: ${isoDate}`);
-  }
-  const [yearPart, monthPart, dayPart] = parts;
-  if (!yearPart || !monthPart || !dayPart) {
-    throw new Error(`Invalid ISO date: ${isoDate}`);
-  }
-  const year = Number.parseInt(yearPart, 10);
-  const month = Number.parseInt(monthPart, 10);
-  const day = Number.parseInt(dayPart, 10);
-  const date = new Date(Date.UTC(year, month - 1, day + days));
-  return date.toISOString().slice(0, 10);
-};
-
-const formatHourLabel = (hour24: number): string => {
-  const normalizedHour = ((hour24 % 24) + 24) % 24;
-  const hour12 = normalizedHour % 12 || 12;
-  return `${hour12}${normalizedHour < 12 ? 'am' : 'pm'}`;
-};
-
-const formatHourRange = (hour24: number): string => `${formatHourLabel(hour24)}-${formatHourLabel(hour24 + 1)}`;
-
-const parseRelativeDate = (text: string, timeZone: string): { preferredDate: string } | null => {
-  const today = getZonedDateParts(new Date(), timeZone);
-  const todayIso = formatDateIso(today.year, today.month, today.day);
-  if (/\btoday\b/i.test(text)) {
-    return { preferredDate: todayIso };
-  }
-  if (/\btomorrow\b/i.test(text)) {
-    return { preferredDate: addCalendarDays(todayIso, 1) };
-  }
-
-  const weekdayMatch = text.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
-  if (weekdayMatch) {
-    const weekdayName = weekdayMatch[1]?.toLowerCase();
-    if (!weekdayName) {
-      return null;
-    }
-    const targetWeekday = WEEKDAYS[weekdayName];
-    if (targetWeekday === undefined) {
-      return null;
-    }
-    const offset = (targetWeekday - today.weekday + 7) % 7 || 7;
-    return { preferredDate: addCalendarDays(todayIso, offset) };
-  }
-
-  return null;
-};
-
-const parseExplicitDate = (text: string): string | null => {
-  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (isoMatch) {
-    const [yearPart, monthPart, dayPart] = [isoMatch[1], isoMatch[2], isoMatch[3]];
-    if (!yearPart || !monthPart || !dayPart) {
-      return null;
-    }
-    const year = Number.parseInt(yearPart, 10);
-    const month = Number.parseInt(monthPart, 10);
-    const day = Number.parseInt(dayPart, 10);
-    return isValidCalendarDate(year, month, day) ? formatDateIso(year, month, day) : null;
-  }
-
-  const monthMatch = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(\d{4})\b/i);
-  if (!monthMatch) {
-    return null;
-  }
-
-  const monthName = monthMatch[1]?.toLowerCase();
-  if (!monthName) {
-    return null;
-  }
-  const month = MONTHS[monthName];
-  if (!month) {
-    return null;
-  }
-  const dayPart = monthMatch[2];
-  const yearPart = monthMatch[3];
-  if (!dayPart || !yearPart) {
-    return null;
-  }
-  const day = Number.parseInt(dayPart, 10);
-  const year = Number.parseInt(yearPart, 10);
-  return isValidCalendarDate(year, month, day) ? formatDateIso(year, month, day) : null;
-};
-
-const parseTimeRange = (text: string): string | null => {
-  const lower = text.toLowerCase();
-  const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
-  if (timeMatch) {
-    const hourPart = timeMatch[1];
-    const meridiem = timeMatch[3];
-    if (!hourPart || !meridiem) {
-      return null;
-    }
-    const rawHour = Number.parseInt(hourPart, 10);
-    const minute = Number.parseInt(timeMatch[2] ?? '0', 10);
-
-    if (!Number.isFinite(rawHour) || rawHour < 1 || rawHour > 12 || !Number.isFinite(minute) || minute < 0 || minute > 59) {
-      return null;
-    }
-
-    const hour24 = meridiem === 'am'
-      ? rawHour % 12
-      : (rawHour % 12) + 12;
-    return formatHourRange(hour24);
-  }
-
-  if (/\bmorning\b/.test(lower)) {
-    return 'morning';
-  }
-  if (/\bafternoon\b/.test(lower)) {
-    return 'afternoon';
-  }
-  if (/\bevening\b/.test(lower)) {
-    return 'evening';
-  }
-  return null;
-};
-
-const parseAvailabilityIntent = (text: string, timeZone: string): ParsedAvailabilityIntent => {
-  const explicitDate = parseExplicitDate(text);
-  const relativeDate = explicitDate ? null : parseRelativeDate(text, timeZone);
-  const preferredDate = explicitDate ?? relativeDate?.preferredDate;
-  if (!preferredDate) {
-    return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(text)
-      ? { kind: 'invalid' }
-      : { kind: 'missing' };
-  }
-
-  const preferredTimeRange = parseTimeRange(text) ?? undefined;
-  if (
-    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.test(text) &&
-    !preferredTimeRange
-  ) {
-    return { kind: 'invalid' };
-  }
-
-  return {
-    kind: 'parsed',
-    preferredDate,
-    ...(preferredTimeRange ? { preferredTimeRange } : {}),
-  };
-};
-
-const formatDisplayDateShort = (isoDate: string): string => {
-  const match = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
-    return isoDate;
-  }
-  const year = Number.parseInt(match[1] ?? '', 10);
-  const month = Number.parseInt(match[2] ?? '', 10);
-  const day = Number.parseInt(match[3] ?? '', 10);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return isoDate;
-  }
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+const describeSlotForSpeech = (slot: { startsAt: string }, timezone: string): string => {
+  const presentation = formatSlotForCustomer(slot.startsAt, timezone);
+  return `${presentation.spokenDate} at ${presentation.spokenLabel}`;
 };
 
 const logEmptyAvailabilityDiagnostics = async (input: {
@@ -323,16 +147,6 @@ const extractName = (text: string): string | undefined => {
   return match?.[1]?.trim();
 };
 
-const extractSlotChoice = (text: string): number | undefined => {
-  const ordinal = text.match(/\b(1|2|3)\b/);
-  if (ordinal) return Number(ordinal[1]);
-  const words: Record<string, number> = { first: 1, second: 2, third: 3 };
-  for (const [word, index] of Object.entries(words)) {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) return index;
-  }
-  return undefined;
-};
-
 const wantsConfirmation = (text: string): boolean => /\b(yes|confirm|sounds good|book it|please do it)\b/i.test(text);
 const declinesConfirmation = (text: string): boolean => /\b(no|not now|change|cancel|different time)\b/i.test(text);
 
@@ -377,6 +191,19 @@ export class ReceptionistAgent {
         this.adapter.getBusinessProfile({ businessId: input.businessId, correlationId })
       );
       nextState = applyAssistantUpdate(nextState, { businessProfile });
+      if (!nextState.timezone) {
+        const resolvedTimezone = businessProfile.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK;
+        nextState = applyAssistantUpdate(nextState, { timezone: resolvedTimezone });
+        if (!businessProfile.timezone?.trim()) {
+          console.warn(JSON.stringify({
+            scope: 'receptionist-agent',
+            event: 'missing_business_timezone',
+            businessId: input.businessId,
+            correlationId,
+            fallbackTimezone: BUSINESS_TIME_ZONE_FALLBACK,
+          }));
+        }
+      }
     }
 
     if (!nextState.services) {
@@ -404,24 +231,38 @@ export class ReceptionistAgent {
       };
     }
 
+    const businessTimezone = resolveBusinessTimezone(nextState);
+
+    const parsedAppointment = normalizeAppointmentIntent({
+      text: trimmed,
+      currentTimestamp: new Date(),
+      businessTimezone,
+    });
+    if (parsedAppointment.status === 'parsed') {
+      nextState = applyAssistantUpdate(nextState, {
+        ...(parsedAppointment.preferredDate ? { preferredDate: parsedAppointment.preferredDate } : {}),
+        ...(parsedAppointment.preferredTimeRange ? { preferredTimeRange: parsedAppointment.preferredTimeRange } : {}),
+      });
+    } else if (!nextState.preferredDate) {
+      return {
+        message: parsedAppointment.status === 'invalid'
+          ? 'I could not parse that date and time. What day and time would you prefer?'
+          : 'What day and time would you prefer?',
+        state: nextState,
+        toolStatus,
+        requiresUserAction: true
+      };
+    }
+
     if (!nextState.preferredDate) {
-      const timeZone = nextState.businessProfile?.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK;
-      const parsedAvailability = parseAvailabilityIntent(trimmed, timeZone);
-      if (parsedAvailability.kind === 'parsed') {
-        nextState = applyAssistantUpdate(nextState, {
-          preferredDate: parsedAvailability.preferredDate,
-          ...(parsedAvailability.preferredTimeRange ? { preferredTimeRange: parsedAvailability.preferredTimeRange } : {}),
-        });
-      } else {
-        return {
-          message: parsedAvailability.kind === 'invalid'
-            ? 'I could not parse that date and time. What day and time would you prefer?'
-            : 'What day and time would you prefer?',
-          state: nextState,
-          toolStatus,
-          requiresUserAction: true
-        };
-      }
+      return {
+        message: nextState.preferredTimeRange
+          ? 'What day would you prefer for that time?'
+          : 'What day and time would you prefer?',
+        state: nextState,
+        toolStatus,
+        requiresUserAction: true
+      };
     }
 
     if (nextState.serviceId && nextState.proposedSlots.length === 0) {
@@ -443,7 +284,7 @@ export class ReceptionistAgent {
         const emptyAvailabilityInput = {
           adapter: this.adapter,
           businessId: input.businessId,
-          businessTimezone: nextState.businessProfile?.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK,
+          businessTimezone,
           preferredDate: nextState.preferredDate ?? '',
           serviceId,
           serviceDurationMinutes: requestedService?.durationMinutes ?? null,
@@ -459,15 +300,14 @@ export class ReceptionistAgent {
         };
         void logEmptyAvailabilityDiagnostics(emptyAvailabilityInput);
         return {
-          message: `I couldn’t find an opening for ${nextState.requestedService ?? 'that service'} on ${formatDisplayDateShort(nextState.preferredDate ?? '')}. Would you like me to check the afternoon or another day?`,
+          message: formatSlotOptions([], businessTimezone),
           state: nextState,
           toolStatus,
           requiresUserAction: true
         };
       }
-      const slotSummary = availability.slots.slice(0, 3).map((slot, index) => `${index + 1}. ${slot.startsAt}`).join(' ');
       return {
-        message: `I found these options: ${slotSummary}. Which one works best?`,
+        message: formatSlotOptions(asSelectableSlots(availability.slots), businessTimezone),
         state: nextState,
         toolStatus,
         requiresUserAction: true
@@ -475,20 +315,15 @@ export class ReceptionistAgent {
     }
 
     if (nextState.proposedSlots.length > 0 && !nextState.selectedSlot) {
-      const selectedIndex = extractSlotChoice(trimmed);
-      if (selectedIndex && nextState.proposedSlots[selectedIndex - 1]) {
+      const selectedSlot = selectSlotFromUtterance(asSelectableSlots(nextState.proposedSlots), trimmed, businessTimezone);
+      if (selectedSlot) {
         nextState = applyAssistantUpdate(nextState, {
-          selectedSlot: nextState.proposedSlots[selectedIndex - 1]
+          selectedSlot,
         });
-      } else if (/\b(9|10|11|12|1|2|3|4|5|6|7|8)\b/.test(lower) && /am|pm|:/.test(lower)) {
-        const chosen = nextState.proposedSlots.find((slot) => lower.includes(slot.startsAt.slice(11, 16)));
-        if (chosen) {
-          nextState = applyAssistantUpdate(nextState, { selectedSlot: chosen });
-        }
       }
       if (!nextState.selectedSlot) {
         return {
-          message: `Please choose one of the available times first: ${nextState.proposedSlots.slice(0, 3).map((slot, index) => `${index + 1}. ${slot.startsAt}`).join(' ')}.`,
+          message: formatSelectionPrompt(asSelectableSlots(nextState.proposedSlots), businessTimezone),
           state: nextState,
           toolStatus,
           requiresUserAction: true
@@ -536,7 +371,7 @@ export class ReceptionistAgent {
         };
       }
       return {
-        message: `I have ${nextState.requestedService ?? 'the service'} for ${nextState.customerName} at ${slot.startsAt}. Should I confirm this booking?`,
+        message: `Just to confirm: ${nextState.requestedService ?? 'the service'} on ${formatSlotForConfirmation(slot, businessTimezone, nextState.callerTimezone)} with ${slot.staffName ?? 'your stylist'}, for ${nextState.customerName} at ${nextState.customerPhone}. Should I book it?`,
         state: nextState,
         toolStatus,
         requiresUserAction: true
@@ -589,7 +424,7 @@ export class ReceptionistAgent {
         selectedSlot
       });
       return {
-        message: `Booked. ${nextState.requestedService ?? 'The service'} is confirmed for ${customer.fullName} at ${selectedSlot.startsAt}.`,
+        message: `Booked. ${nextState.requestedService ?? 'The service'} is confirmed for ${customer.fullName} at ${formatSlotForConfirmation(selectedSlot, businessTimezone, nextState.callerTimezone)}.`,
         state: nextState,
         toolStatus,
         requiresUserAction: false

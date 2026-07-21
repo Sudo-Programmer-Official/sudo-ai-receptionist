@@ -45,6 +45,7 @@ export const buildRealtimeInstructions = ({ conversation, businessContext, model
     `Business: ${businessContext.businessName}.`,
     `Services: ${businessContext.serviceNames.slice(0, 8).join(', ') || 'none'}.`,
     `Timezone: ${businessContext.timeZone ?? 'unknown'}.`,
+    conversation.callerTimezone ? `Caller timezone: ${conversation.callerTimezone}.` : '',
     `Location: ${businessContext.location ?? 'unknown'}.`,
     businessContext.bookingPolicy ? `Policy: ${businessContext.bookingPolicy}.` : '',
     `Known service: ${conversation.requestedService ?? 'unknown'}.`,
