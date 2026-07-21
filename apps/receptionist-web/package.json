@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@sudo-ai-receptionist/shared": "file:../../packages/shared"
+  },
   "devDependencies": {
     "@types/node": "^22.10.7",
     "jsdom": "^26.1.0",
