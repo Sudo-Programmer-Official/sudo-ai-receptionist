@@ -393,7 +393,6 @@ export class SalonFlowAdapter implements BusinessAdapter {
         serviceId: input.serviceId,
         preferredDate: input.preferredDate,
         preferredTimeRange: input.preferredTimeRange,
-        staffPreference: input.staffPreference,
         limit,
       },
       validate: parseAvailability,

@@ -31,6 +31,216 @@ export interface AgentTurnResult {
 
 const normalize = (value: string): string => value.trim().toLowerCase();
 
+const BUSINESS_TIME_ZONE_FALLBACK = 'America/Chicago';
+
+const MONTHS: Record<string, number> = {
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  may: 5,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
+};
+
+const WEEKDAYS: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+type ParsedAvailabilityIntent =
+  | { kind: 'parsed'; preferredDate: string; preferredTimeRange?: string }
+  | { kind: 'invalid' }
+  | { kind: 'missing' };
+
+const getZonedDateParts = (date: Date, timeZone: string): { year: number; month: number; day: number; weekday: number } => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+  });
+  const parts = formatter.formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
+  const yearPart = getPart('year');
+  const monthPart = getPart('month');
+  const dayPart = getPart('day');
+  const weekdayPart = getPart('weekday');
+  if (!yearPart || !monthPart || !dayPart || !weekdayPart) {
+    throw new Error(`Failed to read date parts for time zone ${timeZone}`);
+  }
+  const year = Number.parseInt(yearPart, 10);
+  const month = Number.parseInt(monthPart, 10);
+  const day = Number.parseInt(dayPart, 10);
+  const weekdayName = weekdayPart.toLowerCase();
+  const weekday = WEEKDAYS[weekdayName] ?? 0;
+  return { year, month, day, weekday };
+};
+
+const formatDateIso = (year: number, month: number, day: number): string => `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+const isValidCalendarDate = (year: number, month: number, day: number): boolean => {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
+
+const addCalendarDays = (isoDate: string, days: number): string => {
+  const parts = isoDate.split('-');
+  if (parts.length !== 3) {
+    throw new Error(`Invalid ISO date: ${isoDate}`);
+  }
+  const [yearPart, monthPart, dayPart] = parts;
+  if (!yearPart || !monthPart || !dayPart) {
+    throw new Error(`Invalid ISO date: ${isoDate}`);
+  }
+  const year = Number.parseInt(yearPart, 10);
+  const month = Number.parseInt(monthPart, 10);
+  const day = Number.parseInt(dayPart, 10);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return date.toISOString().slice(0, 10);
+};
+
+const formatHourLabel = (hour24: number): string => {
+  const normalizedHour = ((hour24 % 24) + 24) % 24;
+  const hour12 = normalizedHour % 12 || 12;
+  return `${hour12}${normalizedHour < 12 ? 'am' : 'pm'}`;
+};
+
+const formatHourRange = (hour24: number): string => `${formatHourLabel(hour24)}-${formatHourLabel(hour24 + 1)}`;
+
+const parseRelativeDate = (text: string, timeZone: string): { preferredDate: string } | null => {
+  const today = getZonedDateParts(new Date(), timeZone);
+  const todayIso = formatDateIso(today.year, today.month, today.day);
+  if (/\btoday\b/i.test(text)) {
+    return { preferredDate: todayIso };
+  }
+  if (/\btomorrow\b/i.test(text)) {
+    return { preferredDate: addCalendarDays(todayIso, 1) };
+  }
+
+  const weekdayMatch = text.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  if (weekdayMatch) {
+    const weekdayName = weekdayMatch[1]?.toLowerCase();
+    if (!weekdayName) {
+      return null;
+    }
+    const targetWeekday = WEEKDAYS[weekdayName];
+    if (targetWeekday === undefined) {
+      return null;
+    }
+    const offset = (targetWeekday - today.weekday + 7) % 7 || 7;
+    return { preferredDate: addCalendarDays(todayIso, offset) };
+  }
+
+  return null;
+};
+
+const parseExplicitDate = (text: string): string | null => {
+  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (isoMatch) {
+    const [yearPart, monthPart, dayPart] = [isoMatch[1], isoMatch[2], isoMatch[3]];
+    if (!yearPart || !monthPart || !dayPart) {
+      return null;
+    }
+    const year = Number.parseInt(yearPart, 10);
+    const month = Number.parseInt(monthPart, 10);
+    const day = Number.parseInt(dayPart, 10);
+    return isValidCalendarDate(year, month, day) ? formatDateIso(year, month, day) : null;
+  }
+
+  const monthMatch = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(\d{4})\b/i);
+  if (!monthMatch) {
+    return null;
+  }
+
+  const monthName = monthMatch[1]?.toLowerCase();
+  if (!monthName) {
+    return null;
+  }
+  const month = MONTHS[monthName];
+  if (!month) {
+    return null;
+  }
+  const dayPart = monthMatch[2];
+  const yearPart = monthMatch[3];
+  if (!dayPart || !yearPart) {
+    return null;
+  }
+  const day = Number.parseInt(dayPart, 10);
+  const year = Number.parseInt(yearPart, 10);
+  return isValidCalendarDate(year, month, day) ? formatDateIso(year, month, day) : null;
+};
+
+const parseTimeRange = (text: string): string | null => {
+  const lower = text.toLowerCase();
+  const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+  if (timeMatch) {
+    const hourPart = timeMatch[1];
+    const meridiem = timeMatch[3];
+    if (!hourPart || !meridiem) {
+      return null;
+    }
+    const rawHour = Number.parseInt(hourPart, 10);
+    const minute = Number.parseInt(timeMatch[2] ?? '0', 10);
+
+    if (!Number.isFinite(rawHour) || rawHour < 1 || rawHour > 12 || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+      return null;
+    }
+
+    const hour24 = meridiem === 'am'
+      ? rawHour % 12
+      : (rawHour % 12) + 12;
+    return formatHourRange(hour24);
+  }
+
+  if (/\bmorning\b/.test(lower)) {
+    return 'morning';
+  }
+  if (/\bafternoon\b/.test(lower)) {
+    return 'afternoon';
+  }
+  if (/\bevening\b/.test(lower)) {
+    return 'evening';
+  }
+  return null;
+};
+
+const parseAvailabilityIntent = (text: string, timeZone: string): ParsedAvailabilityIntent => {
+  const explicitDate = parseExplicitDate(text);
+  const relativeDate = explicitDate ? null : parseRelativeDate(text, timeZone);
+  const preferredDate = explicitDate ?? relativeDate?.preferredDate;
+  if (!preferredDate) {
+    return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(text)
+      ? { kind: 'invalid' }
+      : { kind: 'missing' };
+  }
+
+  const preferredTimeRange = parseTimeRange(text) ?? undefined;
+  if (
+    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.test(text) &&
+    !preferredTimeRange
+  ) {
+    return { kind: 'invalid' };
+  }
+
+  return {
+    kind: 'parsed',
+    preferredDate,
+    ...(preferredTimeRange ? { preferredTimeRange } : {}),
+  };
+};
+
 const findService = (services: ServiceOffering[], text: string): ServiceOffering | undefined => {
   const normalized = normalize(text);
   return services.find((service) => normalized.includes(normalize(service.name)) || normalized.includes(normalize(service.serviceId)));
@@ -44,11 +254,6 @@ const extractPhone = (text: string): string | undefined => {
 const extractName = (text: string): string | undefined => {
   const match = text.match(/(?:i'?m|my name is|this is)\s+([a-z]+(?:\s+[a-z]+){0,2})/i);
   return match?.[1]?.trim();
-};
-
-const extractDatePhrase = (text: string): string | undefined => {
-  const match = text.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})\b/i);
-  return match?.[1];
 };
 
 const extractSlotChoice = (text: string): number | undefined => {
@@ -133,12 +338,18 @@ export class ReceptionistAgent {
     }
 
     if (!nextState.preferredDate) {
-      const date = extractDatePhrase(trimmed);
-      if (date) {
-        nextState = applyAssistantUpdate(nextState, { preferredDate: date, preferredTimeRange: trimmed });
+      const timeZone = nextState.businessProfile?.timezone?.trim() || BUSINESS_TIME_ZONE_FALLBACK;
+      const parsedAvailability = parseAvailabilityIntent(trimmed, timeZone);
+      if (parsedAvailability.kind === 'parsed') {
+        nextState = applyAssistantUpdate(nextState, {
+          preferredDate: parsedAvailability.preferredDate,
+          ...(parsedAvailability.preferredTimeRange ? { preferredTimeRange: parsedAvailability.preferredTimeRange } : {}),
+        });
       } else {
         return {
-          message: 'What day and time would you prefer?',
+          message: parsedAvailability.kind === 'invalid'
+            ? 'I could not parse that date and time. What day and time would you prefer?'
+            : 'What day and time would you prefer?',
           state: nextState,
           toolStatus,
           requiresUserAction: true
@@ -154,7 +365,6 @@ export class ReceptionistAgent {
           serviceId,
           preferredDate: nextState.preferredDate ?? '',
           preferredTimeRange: nextState.preferredTimeRange,
-          staffPreference: nextState.staffPreference,
           limit: 3,
           correlationId
         })
