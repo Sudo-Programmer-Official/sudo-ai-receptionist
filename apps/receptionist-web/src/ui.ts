@@ -80,19 +80,19 @@ type StageMeta = {
 };
 
 const stages: StageMeta[] = [
-  { state: 'idle', label: 'Idle', hint: 'Waiting for the voice call to start.' },
+  { state: 'idle', label: 'Ready to start', hint: 'Start the call to begin the conversation.' },
   { state: 'connecting', label: 'Connecting', hint: 'Creating the live voice session.' },
-  { state: 'listening', label: 'Listening', hint: 'Customer is speaking...' },
+  { state: 'listening', label: 'Customer is speaking…', hint: 'Customer is speaking…' },
   { state: 'transcribing', label: 'Transcribing', hint: 'Transcribing the latest user message.' },
-  { state: 'thinking', label: 'Thinking', hint: 'Thinking through the next response.' },
-  { state: 'checking_availability', label: 'Checking availability', hint: 'Checking availability...' },
+  { state: 'thinking', label: 'Understanding the request…', hint: 'Understanding the request…' },
+  { state: 'checking_availability', label: 'Checking availability…', hint: 'Checking availability…' },
   { state: 'offering_slots', label: 'Offering slots', hint: 'Presenting the best openings.' },
   { state: 'collecting_customer', label: 'Collecting customer', hint: 'Collecting customer details.' },
   { state: 'confirming', label: 'Confirming', hint: 'Waiting for a yes to book.' },
   { state: 'booking', label: 'Booking', hint: 'Booking the appointment...' },
-  { state: 'booked', label: 'Booked', hint: 'Appointment booked.' },
+  { state: 'booked', label: 'Appointment booked', hint: 'Appointment booked.' },
   { state: 'interrupted', label: 'Interrupted', hint: 'Assistant audio stopped.' },
-  { state: 'speaking', label: 'Speaking', hint: 'AI receptionist is speaking...' },
+  { state: 'speaking', label: 'AI receptionist is speaking…', hint: 'AI receptionist is speaking…' },
   { state: 'error', label: 'Error', hint: 'The voice connection or backend request failed.' },
 ];
 
@@ -104,12 +104,10 @@ const shellMarkup = `
           <div class="brand-mark-core"></div>
         </div>
         <div class="brand-copy">
-          <div class="eyebrow">Sudo AI Receptionist</div>
-          <h1>Never miss a call. Always book. 24/7.</h1>
-          <p>Live voice receptionist for SalonFlow bookings, designed for polished demos and real calls.</p>
+          <h1>Sudo AI Receptionist</h1>
+          <p>Never miss a call. Always book. 24/7.</p>
         </div>
       </div>
-      <div class="connection-orb" id="connectionDot" aria-hidden="true"></div>
       <div class="live-pill">
         <span class="live-pill-dot" aria-hidden="true"></span>
         <span>Live voice conversation</span>
@@ -127,11 +125,6 @@ const shellMarkup = `
               <span id="voiceHint">Waiting for the voice call to start.</span>
             </div>
           </div>
-          <div class="status-strip">
-            <div class="status-chip" id="connectionState">Disconnected</div>
-            <div class="status-chip" id="apiState">Checking API</div>
-            <div class="status-chip" id="micState">Mic off</div>
-          </div>
         </div>
 
         <div class="transcript-card card" id="transcriptCard">
@@ -140,7 +133,6 @@ const shellMarkup = `
               <div class="section-kicker">Transcript</div>
               <h2>Conversation</h2>
             </div>
-            <button class="ghost subtle-button" id="clearBtn" type="button">Hide transcript</button>
           </div>
           <div class="transcript" id="transcript"></div>
         </div>
@@ -148,7 +140,7 @@ const shellMarkup = `
         <div class="control-bar card">
           <button class="control-chip" id="micBtn" type="button">
             <span class="control-icon control-icon-mic" aria-hidden="true"></span>
-            <span>Mic</span>
+            <span>Mute</span>
           </button>
           <button class="control-chip" id="interruptBtn" type="button">Interrupt</button>
           <div class="call-core">
@@ -157,18 +149,24 @@ const shellMarkup = `
             </button>
             <div class="call-button-label" id="connectLabel">Start call</div>
           </div>
-          <button class="control-chip" id="sendBtn" type="button">Send text</button>
+          <button class="control-chip" id="clearBtn" type="button">Transcript</button>
         </div>
 
-        <div class="text-fallback card">
-          <div class="section-head compact">
+        <details class="text-fallback card" id="useTextDrawer">
+          <summary>
             <div>
-              <div class="section-kicker">Text fallback</div>
+              <div class="section-kicker">Use text instead</div>
               <h3>Type the customer request if voice is unavailable.</h3>
             </div>
+            <span class="small">Collapsed by default</span>
+          </summary>
+          <div class="text-fallback-body">
+            <textarea id="userText" placeholder="Type the customer request if voice is unavailable."></textarea>
+            <div class="text-fallback-actions">
+              <button class="primary" id="sendBtn" type="button">Send text</button>
+            </div>
           </div>
-          <textarea id="userText" placeholder="Type the customer request if voice is unavailable."></textarea>
-        </div>
+        </details>
       </section>
 
       <aside class="sidebar">
@@ -250,6 +248,12 @@ const shellMarkup = `
                 </div>
                 <div class="small" id="sessionSummary">No session started.</div>
                 <div class="small" id="bookingValue">Unconfirmed</div>
+              </div>
+              <div class="chip-row wrap hidden-state-row">
+                <div class="status-chip" id="connectionState">Disconnected</div>
+                <div class="status-chip" id="apiState">Checking API</div>
+                <div class="status-chip" id="micState">Mic off</div>
+                <div class="status-dot" id="connectionDot" aria-hidden="true"></div>
               </div>
               <div class="card diagnostics-card">
                 <div class="row-between">
@@ -436,7 +440,7 @@ const titleCase = (value: string): string =>
 
 const formatServiceDetails = (conversation: ConversationStateSnapshot | null): { name: string; meta: string } => {
   if (!conversation) {
-    return { name: 'None yet', meta: 'Duration and price will appear here.' };
+    return { name: 'Not selected', meta: 'Duration and price will appear here.' };
   }
 
   const service = conversation.services?.find(
@@ -475,7 +479,7 @@ const formatPreferredTimeSummary = (
   currentTimestamp: string | Date,
 ): { value: string; meta: string } => {
   if (!conversation) {
-    return { value: 'No preferred time yet', meta: 'The business timezone will be used automatically.' };
+    return { value: 'Not selected', meta: 'The business timezone will be used automatically.' };
   }
 
   const selectedSlot = conversation.selectedSlot;
@@ -499,7 +503,7 @@ const formatPreferredTimeSummary = (
     };
   }
 
-  return { value: 'No preferred time yet', meta: 'The business timezone will be used automatically.' };
+  return { value: 'Not selected', meta: 'The business timezone will be used automatically.' };
 };
 
 const formatConversationStatus = (
@@ -508,7 +512,7 @@ const formatConversationStatus = (
   bookingStatus?: ConversationStateSnapshot['bookingConfirmationStatus'],
 ): { label: string; detail: string; progress: number } => {
   if (voiceState === 'booked' || bookingStatus === 'confirmed') {
-    return { label: 'Booked', detail: 'Appointment booked.', progress: 100 };
+    return { label: 'Appointment booked', detail: 'Appointment booked.', progress: 100 };
   }
   if (voiceState === 'booking') {
     return { label: 'Booking', detail: 'Booking the appointment...', progress: 92 };
@@ -541,9 +545,9 @@ const formatConversationStatus = (
     return { label: 'Connecting', detail: 'Creating the live voice session.', progress: 18 };
   }
   if (connectionState === 'api_connected') {
-    return { label: 'Ready', detail: 'Backend healthy and ready to connect.', progress: 10 };
+    return { label: 'Ready to answer', detail: 'Start the call to begin the conversation.', progress: 10 };
   }
-  return { label: 'Idle', detail: 'Waiting for the live call to begin.', progress: 0 };
+  return { label: 'Ready to answer', detail: 'Start the call to begin the conversation.', progress: 0 };
 };
 
 const formatCallDuration = (startedAtMs: number): string => {
@@ -627,7 +631,8 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
   const setTranscriptVisibility = (visible: boolean): void => {
     transcriptVisible = visible;
     dom.transcriptCard.classList.toggle('collapsed', !visible);
-    dom.clearBtn.textContent = visible ? 'Hide transcript' : 'Show transcript';
+    dom.clearBtn.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    dom.clearBtn.classList.toggle('active', visible);
   };
 
   const renderConversationSummary = (): void => {
@@ -650,9 +655,9 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
 
     dom.callerTitle.textContent = hasCustomer ? 'Customer' : 'Caller';
     dom.nameValue.textContent = customerName || 'Details being collected';
-    dom.phoneValue.textContent = maskPhoneForCard(conversation?.customerPhone);
+    dom.phoneValue.textContent = conversation?.customerPhone ? maskPhoneForCard(conversation.customerPhone) : 'Details being collected';
     dom.customerBadge.textContent = hasCustomer ? 'Existing customer' : 'New customer';
-    dom.callerAvatar.textContent = initials;
+    dom.callerAvatar.textContent = initials || 'C';
 
     dom.serviceValue.textContent = serviceSummary.name;
     dom.serviceMeta.textContent = serviceSummary.meta;
@@ -668,7 +673,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
 
     updateWaveformState(dom.waveform, displayedVoiceState);
     dom.voiceState.textContent = stages.find((entry) => entry.state === displayedVoiceState)?.label ?? titleCase(displayedVoiceState);
-    dom.voiceHint.textContent = stages.find((entry) => entry.state === displayedVoiceState)?.hint ?? 'Waiting for the voice call to start.';
+    dom.voiceHint.textContent = stages.find((entry) => entry.state === displayedVoiceState)?.hint ?? 'Start the call to begin the conversation.';
 
     if (state.connectionState === 'webrtc_connected' || state.connectionState === 'data_channel_open') {
       startCallTimer();
@@ -679,7 +684,17 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     }
   };
 
+  const renderTranscriptEmptyState = (): void => {
+    if (dom.transcript.querySelector('.message')) {
+      return;
+    }
+    dom.transcript.innerHTML = '<div class="transcript-empty">Start the call to begin the conversation.</div>';
+  };
+
   const appendTranscriptMessage = (role: 'user' | 'assistant' | 'tool', text: string): void => {
+    if (dom.transcript.querySelector('.transcript-empty')) {
+      dom.transcript.innerHTML = '';
+    }
     const entry = document.createElement('article');
     entry.className = `message ${role}`;
 
@@ -982,6 +997,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     state.micState = 'off';
     setStatusDot(dom.connectionDot, '');
     stopCallTimer();
+    renderTranscriptEmptyState();
     renderConversationSummary();
     updateConnectButton();
     renderReadiness();
@@ -1033,8 +1049,9 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
     seedWaveformBars();
     setChipState(dom.connectionState, 'Disconnected');
     setChipState(dom.micState, 'Mic off');
-    setChipState(dom.voiceState, 'Idle');
+    setChipState(dom.voiceState, 'Ready to start');
     setTranscriptVisibility(true);
+    renderTranscriptEmptyState();
     renderConversationSummary();
     updateConnectButton();
     renderReadiness();
