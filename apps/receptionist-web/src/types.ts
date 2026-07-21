@@ -54,6 +54,7 @@ export type RealtimeDiagnostics = {
   connectInFlight: boolean;
   sessionRequestCount: number;
   webrtcRequestCount: number;
+  activeTimeoutNames?: string[];
   peerConnectionState: string;
   iceConnectionState: string;
   signalingState: string;
@@ -63,6 +64,7 @@ export type RealtimeDiagnostics = {
   lastEventType: string;
   lastErrorMessage: string;
   lastErrorSource: string;
+  disconnectReason?: string;
   lastSuccessfulMilestone: string;
   finalTranscriptCount?: number;
   duplicateTranscriptEventsIgnored?: number;

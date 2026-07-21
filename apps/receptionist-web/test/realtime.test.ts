@@ -163,6 +163,11 @@ const flush = async (): Promise<void> => {
   await new Promise((resolve) => queueMicrotask(resolve));
 };
 
+const microFlush = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 describe('realtime transcript dedupe', () => {
   test('uses item or event ids to suppress duplicate transcript events', () => {
     const first = {
@@ -527,6 +532,66 @@ describe('RealtimeVoiceController', () => {
 
     expect(api.createRealtimeSession).toHaveBeenCalledTimes(2);
     expect(api.connectRealtimeCall).toHaveBeenCalledTimes(2);
+  });
+
+  test('temporary disconnected state can recover without error', async () => {
+    vi.useFakeTimers();
+    try {
+      await createController(false);
+      const connectPromise = controller.connect();
+      await microFlush();
+      await connectPromise;
+
+      const pc = (controller as unknown as { pc: FakeRTCPeerConnection | null }).pc;
+      if (!pc) {
+        throw new Error('Expected a peer connection');
+      }
+
+      pc.connectionState = 'disconnected';
+      pc.onconnectionstatechange?.(new Event('connectionstatechange'));
+      await microFlush();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await microFlush();
+      expect(errors).not.toContain('WebRTC connection disconnected.');
+
+      pc.connectionState = 'connected';
+      pc.onconnectionstatechange?.(new Event('connectionstatechange'));
+      await microFlush();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await microFlush();
+
+      expect(errors).not.toContain('WebRTC connection disconnected.');
+      expect(states).not.toContain('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('connected call does not fail when assistant audio never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      await createController(false);
+      const connectPromise = controller.connect();
+      await microFlush();
+      await connectPromise;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await microFlush();
+
+      expect(errors).not.toContain('Realtime connection readiness timed out.');
+      expect(errors).not.toContain('WebRTC connection disconnected.');
+      expect(states).not.toContain('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('unknown realtime events do not mark error', async () => {
+    dataChannel.emit({ type: 'some.future.event' });
+    await flush();
+
+    expect(errors).toHaveLength(0);
+    expect(states).not.toContain('error');
   });
 });
 

@@ -34,7 +34,7 @@ const DEFAULT_VOICE = 'alloy';
 const RENDERER_INSTRUCTIONS = 'You are the voice renderer for an AI receptionist. Speak the supplied response naturally and exactly. Do not make booking decisions, call tools, ask additional questions, or change appointment details.';
 const ICE_GATHERING_TIMEOUT_MS = 3_000;
 const CONNECTION_READY_TIMEOUT_MS = 5_000;
-const DISCONNECTED_RECOVERY_TIMEOUT_MS = 1_500;
+const DISCONNECTED_RECOVERY_TIMEOUT_MS = 5_000;
 
 const safeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
@@ -170,6 +170,8 @@ export class RealtimeVoiceController {
   private connectionAttemptId = 0;
   private sessionRequestCount = 0;
   private webrtcRequestCount = 0;
+  private activeTimeoutNames = new Set<string>();
+  private connectStartedAtMs: number | null = null;
   private destroyed = false;
   private connectPromise: Promise<RealtimeSessionResponse | null> | null = null;
   private resolveReady: (() => void) | null = null;
@@ -226,6 +228,7 @@ export class RealtimeVoiceController {
 
     this.destroyed = false;
     const attemptId = ++this.connectionAttemptId;
+    this.connectStartedAtMs = performance.now();
     this.clearTransientConnectionError();
     this.updateDiagnostics({
       connectionAttemptId: attemptId,
@@ -275,6 +278,7 @@ export class RealtimeVoiceController {
     this.pendingAudioStartAt = null;
     this.assistantSpeaking = false;
     this.isDisconnecting = true;
+    this.setDisconnectReason('explicit_end_call');
     this.clearConnectionTimers();
     if (this.connectPromise) {
       this.connectPromise = null;
@@ -296,6 +300,8 @@ export class RealtimeVoiceController {
     this.session = null;
     this.connectionState = 'idle';
     this.micState = 'off';
+    this.connectStartedAtMs = null;
+    this.activeTimeoutNames.clear();
     this.updateDiagnostics({
       peerConnectionState: 'closed',
       iceConnectionState: 'closed',
@@ -346,6 +352,7 @@ export class RealtimeVoiceController {
       return null;
     }
     this.events.onConnectionStateChange('api_connected');
+    this.logTransition('api_connected', attemptId);
     this.events.onStateChange('connecting');
     this.events.onSessionSummary('Requesting a short-lived realtime session from the backend...');
     const sessionStartedAt = performance.now();
@@ -385,6 +392,7 @@ export class RealtimeVoiceController {
       lastSuccessfulMilestone: 'session created',
     });
     this.events.onConnectionStateChange('session_created');
+    this.logTransition('session_created', attemptId);
     this.events.onSessionSummary(summarizeSession(session));
     this.events.onMetric({
       name: 'realtime session startup latency',
@@ -401,6 +409,7 @@ export class RealtimeVoiceController {
     this.remoteStream = new MediaStream();
     this.audioElement.srcObject = this.remoteStream;
     this.events.onConnectionStateChange('webrtc_connecting');
+    this.logTransition('webrtc_connecting', attemptId);
     this.updateDiagnostics();
     this.attachPeerConnectionHandlers(pc, sessionStartedAt, attemptId);
 
@@ -451,6 +460,7 @@ export class RealtimeVoiceController {
       return null;
     }
 
+    this.clearConnectionTimers();
     this.updateDiagnostics({ lastSuccessfulMilestone: 'connection ready' });
     this.sendEvent(createSessionUpdatePayload(session));
     this.events.onStateChange('listening');
@@ -533,21 +543,28 @@ export class RealtimeVoiceController {
         return;
       }
       this.diagnostics.peerConnectionState = pc.connectionState;
+      this.logTransition('peer_connection_state_change', attemptId);
       if (pc.connectionState === 'connected') {
         this.clearDisconnectedRecoveryTimer();
         this.peerConnectionOpen = true;
+        this.setDisconnectReason('connected');
         this.events.onConnectionStateChange('webrtc_connected');
         this.events.onMetric({
           name: 'session startup latency',
           valueMs: Math.round(performance.now() - sessionStartedAt),
           detail: 'peer connection connected',
         });
+        this.clearConnectionTimers();
         this.updateDiagnostics({ lastSuccessfulMilestone: 'peer connection connected' });
         this.resolveReadyIfPossible();
       } else if (pc.connectionState === 'failed') {
-        this.setConnectionFailure('WebRTC connection failed.', 'peer_connection', attemptId);
+        this.setConnectionFailure('WebRTC connection failed.', 'peer_connection_failed', attemptId);
       } else if (pc.connectionState === 'disconnected') {
-        this.scheduleDisconnectedRecoveryFailure(pc, attemptId);
+        if (this.peerConnectionOpen || this.dataChannelOpen || this.connectionIsReady()) {
+          this.scheduleDisconnectedRecoveryFailure(pc, attemptId);
+        } else {
+          this.updateDiagnostics({ lastSuccessfulMilestone: 'peer connection disconnected' });
+        }
       } else if (pc.connectionState === 'closed' && !this.isDisconnecting) {
         this.setConnectionFailure(`WebRTC connection ${pc.connectionState}.`, 'peer_connection', attemptId);
       }
@@ -559,8 +576,9 @@ export class RealtimeVoiceController {
         return;
       }
       this.diagnostics.iceConnectionState = pc.iceConnectionState;
+      this.logTransition('ice_connection_state_change', attemptId);
       if (pc.iceConnectionState === 'failed') {
-        this.setConnectionFailure('ICE negotiation failed.', 'ice_connection', attemptId);
+        this.setConnectionFailure('ICE negotiation failed.', 'ice_connection_failed', attemptId);
       }
       this.updateDiagnostics();
     };
@@ -570,6 +588,7 @@ export class RealtimeVoiceController {
         return;
       }
       this.diagnostics.signalingState = pc.signalingState;
+      this.logTransition('signaling_state_change', attemptId);
       this.updateDiagnostics();
     };
   }
@@ -581,7 +600,10 @@ export class RealtimeVoiceController {
       }
       this.diagnostics.dataChannelState = dataChannel.readyState;
       this.dataChannelOpen = true;
+      this.setDisconnectReason('connected');
+      this.clearConnectionTimers();
       this.events.onConnectionStateChange('data_channel_open');
+      this.logTransition('data_channel_open', attemptId);
       this.events.onSessionSummary(`${this.session ? summarizeSession(this.session) : 'Realtime session'} · voice ready`);
       this.updateDiagnostics({ lastSuccessfulMilestone: 'data channel open' });
       this.updateDiagnostics();
@@ -593,9 +615,10 @@ export class RealtimeVoiceController {
         return;
       }
       this.diagnostics.dataChannelState = dataChannel.readyState;
+      this.logTransition('data_channel_close', attemptId);
       this.updateDiagnostics();
       if (!this.isDisconnecting) {
-        this.setConnectionFailure('Realtime data channel closed.', 'data_channel', attemptId);
+        this.setConnectionFailure('Realtime data channel closed.', 'data_channel_closed', attemptId);
       }
     };
 
@@ -604,9 +627,10 @@ export class RealtimeVoiceController {
         return;
       }
       this.diagnostics.dataChannelState = dataChannel.readyState;
+      this.logTransition('data_channel_error', attemptId);
       this.updateDiagnostics();
       if (!this.isDisconnecting) {
-        this.setConnectionFailure('Realtime data channel error.', 'data_channel', attemptId);
+        this.setConnectionFailure('Realtime data channel error.', 'data_channel_error', attemptId);
       }
     };
 
@@ -639,19 +663,23 @@ export class RealtimeVoiceController {
       return;
     }
     await new Promise<void>((resolve) => {
+      this.setActiveTimeout('ice_gathering_timeout');
       const timeoutId = window.setTimeout(() => {
+        this.clearActiveTimeout('ice_gathering_timeout');
         pc.removeEventListener('icegatheringstatechange', onStateChange);
         resolve();
       }, ICE_GATHERING_TIMEOUT_MS);
       const onStateChange = (): void => {
         if (!this.isCurrentAttempt(attemptId) || this.pc !== pc) {
           window.clearTimeout(timeoutId);
+          this.clearActiveTimeout('ice_gathering_timeout');
           pc.removeEventListener('icegatheringstatechange', onStateChange);
           resolve();
           return;
         }
         if (pc.iceGatheringState === 'complete') {
           window.clearTimeout(timeoutId);
+          this.clearActiveTimeout('ice_gathering_timeout');
           pc.removeEventListener('icegatheringstatechange', onStateChange);
           resolve();
         }
@@ -668,15 +696,18 @@ export class RealtimeVoiceController {
     if (!this.readyPromise) {
       this.readyPromise = new Promise<void>((resolve, reject) => {
         this.clearConnectionReadyTimeout();
+        this.setActiveTimeout('connection_ready_timeout');
         this.connectionReadyTimeoutId = window.setTimeout(() => {
           if (!this.isCurrentAttempt(attemptId)) {
             return;
           }
           this.clearConnectionReadyTimeout();
+          this.clearActiveTimeout('connection_ready_timeout');
           reject(new Error('Realtime connection readiness timed out.'));
         }, CONNECTION_READY_TIMEOUT_MS);
         this.resolveReady = () => {
           this.clearConnectionReadyTimeout();
+          this.clearActiveTimeout('connection_ready_timeout');
           this.readyPromise = null;
           this.resolveReady = null;
           this.rejectReady = null;
@@ -684,6 +715,7 @@ export class RealtimeVoiceController {
         };
         this.rejectReady = (error: Error) => {
           this.clearConnectionReadyTimeout();
+          this.clearActiveTimeout('connection_ready_timeout');
           this.readyPromise = null;
           this.resolveReady = null;
           this.rejectReady = null;
@@ -754,6 +786,9 @@ export class RealtimeVoiceController {
   private clearConnectionTimers(): void {
     this.clearConnectionReadyTimeout();
     this.clearDisconnectedRecoveryTimer();
+    this.clearActiveTimeout('connection_ready_timeout');
+    this.clearActiveTimeout('disconnected_recovery_timeout');
+    this.clearActiveTimeout('ice_gathering_timeout');
   }
 
   private clearDisconnectedRecoveryTimer(): void {
@@ -765,15 +800,21 @@ export class RealtimeVoiceController {
 
   private scheduleDisconnectedRecoveryFailure(pc: RTCPeerConnection, attemptId: number): void {
     this.clearDisconnectedRecoveryTimer();
-    this.updateDiagnostics({ lastSuccessfulMilestone: 'peer connection disconnected' });
+    this.setActiveTimeout('disconnected_recovery_timeout');
+    this.updateDiagnostics({
+      lastSuccessfulMilestone: 'peer connection disconnected',
+      lastErrorSource: 'peer_connection_disconnected_pending',
+      disconnectReason: 'peer_connection_disconnected',
+    });
     this.disconnectedTimeoutId = window.setTimeout(() => {
       if (!this.isCurrentAttempt(attemptId) || this.pc !== pc || this.isDisconnecting) {
         return;
       }
+      this.clearActiveTimeout('disconnected_recovery_timeout');
       if (pc.connectionState === 'connected') {
         return;
       }
-      this.setConnectionFailure('WebRTC connection disconnected.', 'peer_connection', attemptId);
+      this.setConnectionFailure('WebRTC connection disconnected.', 'peer_connection_disconnected', attemptId);
     }, DISCONNECTED_RECOVERY_TIMEOUT_MS);
   }
 
@@ -783,7 +824,9 @@ export class RealtimeVoiceController {
     }
     this.clearConnectionReadyTimeout();
     this.clearDisconnectedRecoveryTimer();
+    this.clearConnectionTimers();
     this.setLastError(message, source);
+    this.setDisconnectReason(source);
     if (this.rejectReady) {
       this.rejectReady(new Error(message));
     }
@@ -803,6 +846,7 @@ export class RealtimeVoiceController {
     this.isDisconnecting = true;
     this.clearConnectionReadyTimeout();
     this.clearDisconnectedRecoveryTimer();
+    this.clearConnectionTimers();
     try {
       this.sendEvent({ type: 'response.cancel' });
       this.sendEvent({ type: 'output_audio_buffer.clear' });
@@ -846,12 +890,14 @@ export class RealtimeVoiceController {
     switch (type) {
       case 'session.created':
       case 'session.updated':
+        this.logTransition(type, this.connectionAttemptId);
         this.events.onSessionSummary(joinLines([
           this.session ? summarizeSession(this.session) : undefined,
           type === 'session.updated' ? 'session updated' : undefined,
         ]));
         return;
     case 'input_audio_buffer.speech_started':
+        this.logTransition(type, this.connectionAttemptId);
         this.lastSpeechEndAt = null;
         if (this.assistantSpeaking) {
           await this.interrupt();
@@ -859,9 +905,11 @@ export class RealtimeVoiceController {
         this.events.onStateChange('listening');
         return;
       case 'input_audio_buffer.speech_stopped':
+        this.logTransition(type, this.connectionAttemptId);
         this.events.onStateChange('thinking');
         return;
       case 'conversation.item.input_audio_transcription.completed': {
+        this.logTransition(type, this.connectionAttemptId);
         const transcript = safeText(event.transcript);
         const dedupeKey = getTranscriptEventDeduplicationKey(event);
         if (!transcript) {
@@ -895,6 +943,7 @@ export class RealtimeVoiceController {
       }
       case 'response.audio.delta':
       case 'response.output_audio.delta':
+        this.logTransition(type, this.connectionAttemptId);
         if (!this.assistantSpeaking && this.pendingAudioStartAt !== null && this.lastSpeechEndAt !== null) {
           this.assistantSpeaking = true;
           this.events.onStateChange('speaking');
@@ -914,6 +963,7 @@ export class RealtimeVoiceController {
       case 'response.audio.done':
       case 'response.output_audio.done':
       case 'response.done':
+        this.logTransition(type, this.connectionAttemptId);
         this.assistantSpeaking = false;
         this.pendingAudioStartAt = null;
         this.events.onStateChange('listening');
@@ -924,6 +974,7 @@ export class RealtimeVoiceController {
         }));
         return;
       case 'error':
+        this.logTransition(type, this.connectionAttemptId);
         this.setConnectionFailure(
           safeText((event as { error?: { message?: string } }).error?.message) || 'Realtime error',
           'realtime_event',
@@ -1006,6 +1057,39 @@ export class RealtimeVoiceController {
     } catch (error) {
       this.setConnectionFailure(error instanceof Error ? error.message : 'The backend request failed.', 'chat');
     }
+  }
+
+  private setActiveTimeout(name: string): void {
+    this.activeTimeoutNames.add(name);
+    this.updateDiagnostics({ activeTimeoutNames: [...this.activeTimeoutNames] });
+  }
+
+  private clearActiveTimeout(name: string): void {
+    if (!this.activeTimeoutNames.has(name)) {
+      return;
+    }
+    this.activeTimeoutNames.delete(name);
+    this.updateDiagnostics({ activeTimeoutNames: [...this.activeTimeoutNames] });
+  }
+
+  private setDisconnectReason(reason: string): void {
+    this.updateDiagnostics({ disconnectReason: reason });
+  }
+
+  private logTransition(source: string, attemptId = this.connectionAttemptId): void {
+    console.info(JSON.stringify({
+      scope: 'receptionist-web',
+      event: 'realtime_transition',
+      attemptId,
+      source,
+      pcState: this.pc?.connectionState ?? 'closed',
+      iceState: this.pc?.iceConnectionState ?? 'closed',
+      dataChannelState: this.dataChannel?.readyState ?? 'closed',
+      elapsedMs: this.connectStartedAtMs === null ? null : Math.max(0, Math.round(performance.now() - this.connectStartedAtMs)),
+      activeTimeoutNames: [...this.activeTimeoutNames],
+      disconnectReason: this.diagnostics.disconnectReason ?? 'none',
+      errorSource: this.diagnostics.lastErrorSource,
+    }));
   }
 
   private async handleUserText(text: string): Promise<ChatResponse> {

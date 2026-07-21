@@ -404,6 +404,9 @@ const formatDiagnosticsValue = (value: unknown): string => {
   if (typeof value === 'boolean') {
     return value ? 'yes' : 'no';
   }
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(', ') : 'none';
+  }
   if (typeof value === 'string' && value.trim()) {
     return value;
   }
@@ -583,6 +586,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       connectInFlight: false,
       sessionRequestCount: 0,
       webrtcRequestCount: 0,
+      activeTimeoutNames: [],
       peerConnectionState: 'idle',
       iceConnectionState: 'idle',
       signalingState: 'idle',
@@ -592,6 +596,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       lastEventType: 'none',
       lastErrorMessage: 'none',
       lastErrorSource: 'none',
+      disconnectReason: 'none',
       lastSuccessfulMilestone: 'idle',
     },
   };
@@ -769,6 +774,10 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       },
       onConnectionStateChange: (connectionState) => {
         state.connectionState = connectionState;
+        if (connectionState === 'error') {
+          state.session = null;
+          stopCallTimer();
+        }
         const meta = formatConnectionState(connectionState);
         setChipState(dom.connectionState, meta.label, meta.mode);
         setStatusDot(
@@ -843,6 +852,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           ['Connect in flight', diagnostics.connectInFlight],
           ['Session requests', diagnostics.sessionRequestCount],
           ['WebRTC requests', diagnostics.webrtcRequestCount],
+          ['Active timeouts', diagnostics.activeTimeoutNames ?? []],
           ['Peer connection', diagnostics.peerConnectionState],
           ['ICE connection', diagnostics.iceConnectionState],
           ['Signaling', diagnostics.signalingState],
@@ -852,6 +862,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
           ['Last event', diagnostics.lastEventType],
           ['Last error', diagnostics.lastErrorMessage],
           ['Last error source', diagnostics.lastErrorSource],
+          ['Disconnect reason', diagnostics.disconnectReason ?? 'none'],
           ['Last milestone', diagnostics.lastSuccessfulMilestone],
           ['Final transcripts', diagnostics.finalTranscriptCount ?? 0],
           ['Duplicates ignored', diagnostics.duplicateTranscriptEventsIgnored ?? 0],
@@ -868,6 +879,7 @@ export const mountReceptionistApp = ({ root, api }: MountOptions): { destroy: ()
       },
       onError: (message) => {
         dom.sessionSummary.textContent = message;
+        state.session = null;
         state.voiceState = 'error';
         renderConversationSummary();
         setStatusDot(dom.connectionDot, 'fail');
