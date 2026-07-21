@@ -26,7 +26,6 @@ SalonFlow is the first integration. The core system stays industry-agnostic and 
 apps/
   receptionist-web/
   receptionist-api/
-  demo-dashboard/
 packages/
   agent-core/
   realtime-runtime/

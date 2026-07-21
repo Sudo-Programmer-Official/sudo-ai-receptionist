@@ -13,7 +13,6 @@ flowchart LR
   Browser -->|ephemeral session only| API
   API -->|server-side tool execution| Mock
   API -->|server-side tool execution| SF
-  API --> Dashboard[demo-dashboard]
 ```
 
 ## Principles
@@ -23,4 +22,3 @@ flowchart LR
 - Tool execution happens on the server.
 - Voice sessions are ephemeral and mediated by the backend.
 - Stable business metadata is cached; appointment availability is not cached beyond a very short safe window.
-
