@@ -44,6 +44,7 @@ describe('realtime WebRTC transport', () => {
       offerSdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1',
       model: 'gpt-realtime-2.1',
       voice: 'alloy',
+      instructions: 'Speak naturally.',
       openAiApiKey: 'sk-test',
       safetyIdentifier: 'safety-id',
       fetchImpl: fetchImpl as typeof fetch,
@@ -54,10 +55,29 @@ describe('realtime WebRTC transport', () => {
 
     const body = capturedInit?.body as FormData;
     expect(body).toBeInstanceOf(FormData);
-    expect(body.get('sdp')).toBe('v=0\r\no=- 1 1 IN IP4 127.0.0.1');
-    expect(body.get('session')).toBe(JSON.stringify({
+    const sdpPart = body.get('sdp');
+    const sessionPart = body.get('session');
+    expect(sdpPart).toBeInstanceOf(Blob);
+    expect(sessionPart).toBeInstanceOf(Blob);
+    await expect((sdpPart as Blob).text()).resolves.toBe('v=0\r\no=- 1 1 IN IP4 127.0.0.1');
+    await expect((sessionPart as Blob).text()).resolves.toBe(JSON.stringify({
       type: 'realtime',
       model: 'gpt-realtime-2.1',
+      instructions: 'Speak naturally.',
+      output_modalities: ['audio'],
+      max_output_tokens: 256,
+      turn_detection: {
+        type: 'server_vad',
+        prefix_padding_ms: 300,
+        silence_duration_ms: 350,
+        threshold: 0.5,
+        create_response: false,
+        interrupt_response: true,
+      },
+      input_audio_transcription: {
+        model: 'gpt-4o-mini-transcribe',
+        language: 'en',
+      },
       audio: {
         output: {
           voice: 'alloy',
@@ -82,6 +102,7 @@ describe('realtime WebRTC transport', () => {
       offerSdp: 'v=0\r\no=- 1 1 IN IP4 127.0.0.1',
       model: 'gpt-realtime-2.1',
       voice: 'alloy',
+      instructions: 'Speak naturally.',
       openAiApiKey: 'sk-test',
       safetyIdentifier: 'safety-id',
       fetchImpl: fetchImpl as typeof fetch,

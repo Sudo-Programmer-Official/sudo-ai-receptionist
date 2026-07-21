@@ -285,11 +285,17 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const model = runtime.openaiRealtimeModel ?? 'gpt-realtime-2.1';
+      const instructions = buildRealtimeInstructions({
+        conversation: session.state,
+        businessContext: session.businessContext,
+        model
+      });
       const startedAt = Date.now();
       const { answerSdp, callId } = await postRealtimeCall({
         offerSdp: parsedOffer.sdp,
         model,
         voice: 'alloy',
+        instructions,
         openAiApiKey: runtime.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '',
         safetyIdentifier: 'sudo-ai-receptionist',
       });

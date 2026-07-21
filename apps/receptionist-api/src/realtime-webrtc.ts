@@ -50,6 +50,7 @@ export const postRealtimeCall = async (input: {
   offerSdp: string;
   model: string;
   voice: string;
+  instructions: string;
   openAiApiKey: string;
   safetyIdentifier: string;
   fetchImpl?: typeof fetch;
@@ -61,6 +62,21 @@ export const postRealtimeCall = async (input: {
   const sessionConfig = {
     type: 'realtime',
     model: input.model,
+    instructions: input.instructions,
+    output_modalities: ['audio'],
+    max_output_tokens: 256,
+    turn_detection: {
+      type: 'server_vad',
+      prefix_padding_ms: 300,
+      silence_duration_ms: 350,
+      threshold: 0.5,
+      create_response: false,
+      interrupt_response: true,
+    },
+    input_audio_transcription: {
+      model: 'gpt-4o-mini-transcribe',
+      language: 'en',
+    },
     audio: {
       output: {
         voice: input.voice,
@@ -69,8 +85,8 @@ export const postRealtimeCall = async (input: {
   };
 
   const formData = new FormData();
-  formData.set('sdp', input.offerSdp);
-  formData.set('session', JSON.stringify(sessionConfig));
+  formData.set('sdp', new Blob([input.offerSdp], { type: 'application/sdp' }), 'offer.sdp');
+  formData.set('session', new Blob([JSON.stringify(sessionConfig)], { type: 'application/json' }), 'session.json');
 
   const response = await fetchImpl('https://api.openai.com/v1/realtime/calls', {
     method: 'POST',
